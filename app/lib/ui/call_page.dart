@@ -10,6 +10,7 @@ import '../core/session.dart';
 import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
+import 'ring_tone.dart';
 import 'theme.dart';
 
 bool get _desktop =>
@@ -67,6 +68,39 @@ class _CallPageState extends State<CallPage> {
 
   Session get session => widget.session;
   GroupCall get call => widget.call;
+
+  /// The caller hears this until someone answers, for at most 40 s.
+  final _ringback = RingTone.ringback();
+  Timer? _ringbackLimit;
+
+  @override
+  void initState() {
+    super.initState();
+    call.addListener(_syncRingback);
+    _syncRingback();
+    _ringbackLimit = Timer(const Duration(seconds: 40), _endRingback);
+  }
+
+  @override
+  void dispose() {
+    _endRingback();
+    super.dispose();
+  }
+
+  void _syncRingback() {
+    if (session.calls?.dialing ?? false) {
+      _ringback.start();
+    } else {
+      _endRingback();
+    }
+  }
+
+  /// Once stopped it stays stopped, even if everyone leaves again.
+  void _endRingback() {
+    call.removeListener(_syncRingback);
+    _ringbackLimit?.cancel();
+    _ringback.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

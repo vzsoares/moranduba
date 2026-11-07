@@ -117,6 +117,13 @@ class Calls extends ChangeNotifier {
   /// The call ringing now; only while we are in none.
   IncomingCall? ringing;
 
+  /// We started the active call and nobody has joined yet.
+  bool get dialing =>
+      _startedActive &&
+      (active?.participants.isEmpty ?? false) &&
+      !(active?.closed ?? true);
+  bool _startedActive = false;
+
   /// Calls that rang once already, so a later joiner does not ring again.
   final Set<String> _rang = {};
   Timer? _ringTimer;
@@ -197,6 +204,7 @@ class Calls extends ChangeNotifier {
           : null,
     );
     active = call;
+    _startedActive = running == null;
     if (running == null) {
       onCallEvent?.call(groupId, CallEvent.started(call.callId));
     }

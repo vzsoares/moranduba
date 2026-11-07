@@ -33,7 +33,7 @@ class IncomingCallLayer extends StatefulWidget {
 }
 
 class _IncomingCallLayerState extends State<IncomingCallLayer> {
-  final _tone = RingTone();
+  final _tone = RingTone.incoming();
   Calls? _calls;
   IncomingCall? _ringing;
 
@@ -42,6 +42,7 @@ class _IncomingCallLayerState extends State<IncomingCallLayer> {
   @override
   void initState() {
     super.initState();
+    primeTones();
     widget.controller.addListener(_rewire);
     _rewire();
   }

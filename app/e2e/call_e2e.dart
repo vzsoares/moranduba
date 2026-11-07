@@ -149,8 +149,10 @@ Future<void> _alice() async {
     _log('server set');
   }
   final call = await session.calls!.join(group!.id);
+  if (!session.calls!.dialing) throw StateError('not dialing a new call');
   await call.setCamera(true);
   await _connected(session, call, peer);
+  if (session.calls!.dialing) throw StateError('still dialing with bob in');
   _log('video from bob');
   if (_split) {
     if (call.mode != 'mesh') throw StateError('split call stayed ${call.mode}');
