@@ -4,9 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
-import '../core/groups/group_engine.dart';
-import '../core/groups/groups.dart';
 import '../core/groups/media_types.dart';
+import 'attachments.dart';
 import 'files/files.dart';
 import 'manga.dart';
 import 'theme.dart';
@@ -20,36 +19,23 @@ IconData mediaIcon(MediaKind kind) => switch (kind) {
 };
 
 /// Opens an attachment in a centered window with a download button.
-Future<void> showMediaViewer(
-  BuildContext context, {
-  required Groups groups,
-  required String groupId,
-  required MediaRef media,
-}) => showDialog<void>(
-  context: context,
-  builder: (_) => _MediaViewer(groups: groups, groupId: groupId, media: media),
-);
+Future<void> showMediaViewer(BuildContext context, Attachment media) =>
+    showDialog<void>(
+      context: context,
+      builder: (_) => _MediaViewer(media: media),
+    );
 
 class _MediaViewer extends StatefulWidget {
-  const _MediaViewer({
-    required this.groups,
-    required this.groupId,
-    required this.media,
-  });
+  const _MediaViewer({required this.media});
 
-  final Groups groups;
-  final String groupId;
-  final MediaRef media;
+  final Attachment media;
 
   @override
   State<_MediaViewer> createState() => _MediaViewerState();
 }
 
 class _MediaViewerState extends State<_MediaViewer> {
-  late final Future<Uint8List> _bytes = widget.groups.media(
-    widget.groupId,
-    widget.media,
-  );
+  late final Future<Uint8List> _bytes = widget.media.load();
   bool _saving = false;
 
   MediaKind get _kind => mediaKind(widget.media.mime);
@@ -166,7 +152,7 @@ class _Preview extends StatelessWidget {
   });
 
   final MediaKind kind;
-  final MediaRef media;
+  final Attachment media;
   final Uint8List bytes;
 
   @override
@@ -207,7 +193,7 @@ class _Player extends StatefulWidget {
   });
 
   final Uint8List bytes;
-  final MediaRef media;
+  final Attachment media;
   final bool audioOnly;
 
   @override

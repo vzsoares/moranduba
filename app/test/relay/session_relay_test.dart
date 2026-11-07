@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -182,4 +183,55 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );
+
+  test('files in DMs travel encrypted, with or without a timer', () async {
+    final server = await FakeBlossom.start();
+    addTearDown(server.close);
+    final blossom = BlossomClient(servers: [server.url]);
+    final aliceId = Identity.generate();
+    final bobId = Identity.generate();
+    Future<Session> start(Identity id) => Session.start(
+      id,
+      relays: _relays,
+      blossom: blossom,
+      profileStore: MemorySnapshotStore(),
+      expiryStore: MemorySnapshotStore(),
+    );
+    final alice = await start(aliceId);
+    final bob = await start(bobId);
+    addTearDown(alice.close);
+    addTearDown(bob.close);
+    await alice.requestFriend(bobId.publicKey);
+    await _until(bob, () => bob.incomingRequests.contains(aliceId.publicKey));
+    await bob.acceptFriend(aliceId.publicKey);
+    await _until(alice, () => alice.friends.contains(bobId.publicKey));
+
+    final pdf = Uint8List.fromList(utf8.encode('%PDF-1.4 tiny'));
+    await alice.sendFile(
+      bobId.publicKey,
+      pdf,
+      mime: 'application/pdf',
+      filename: 'brief.pdf',
+    );
+    expect(server.blobs.values.single, isNot(pdf));
+    await _until(bob, () => bob.chatWith(aliceId.publicKey).isNotEmpty);
+    final received = bob.chatWith(aliceId.publicKey).single;
+    expect(dmFileName(received), 'brief.pdf');
+    expect(received.fileMetadata?.mimeType, 'application/pdf');
+    expect(await bob.dmFile(received), pdf);
+
+    await alice.setExpiry(dmChat(bobId.publicKey), 3600);
+    final wav = Uint8List.fromList(List.generate(100, (i) => i));
+    await alice.sendFile(
+      bobId.publicKey,
+      wav,
+      mime: 'audio/wav',
+      filename: 'tone.wav',
+    );
+    await _until(bob, () => bob.chatWith(aliceId.publicKey).length == 2);
+    final timed = bob.chatWith(aliceId.publicKey).last;
+    expect(dmFileName(timed), 'tone.wav');
+    expect(timed.rumor.tags.any((t) => t.first == 'expiration'), isTrue);
+    expect(await bob.dmFile(timed), wav);
+  }, timeout: const Timeout(Duration(seconds: 60)));
 }

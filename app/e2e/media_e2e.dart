@@ -14,6 +14,7 @@ import 'package:moranduba/core/groups/mls_platform.dart';
 import 'package:moranduba/core/groups/rust_group_engine.dart';
 import 'package:moranduba/core/identity.dart';
 import 'package:moranduba/core/session.dart';
+import 'package:moranduba/ui/attachments.dart';
 import 'package:moranduba/ui/groups_page.dart';
 import 'package:moranduba/ui/media_viewer.dart';
 import 'package:moranduba/ui/theme.dart';
@@ -154,9 +155,12 @@ Future<void> _scenario() async {
     unawaited(
       showMediaViewer(
         _navigator.currentContext!,
-        groups: bobGroups,
-        groupId: group.id,
-        media: refs[name]!,
+        Attachment(
+          id: refs[name]!.originalHash,
+          filename: name,
+          mime: refs[name]!.mime,
+          load: () => bobGroups.media(group.id, refs[name]!),
+        ),
       ),
     );
     await Future<void>.delayed(const Duration(seconds: 2));

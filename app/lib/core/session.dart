@@ -27,6 +27,7 @@ class Session extends ChangeNotifier {
     this.relays,
     this.profiles,
     this.expiries,
+    this._blossom,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -68,6 +69,7 @@ class Session extends ChangeNotifier {
       relayList,
       book,
       timers,
+      files,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -86,6 +88,8 @@ class Session extends ChangeNotifier {
   final List<String> relays;
   final ProfileBook profiles;
   final ExpiryBook expiries;
+  final BlossomClient _blossom;
+  final Map<String, Future<Uint8List>> _dmFiles = {};
   Timer? _profileTimer;
   Timer? _pruneTimer;
   Groups? groups;
@@ -452,6 +456,61 @@ class Session extends ChangeNotifier {
     return _send(pubkey, text, const [], expiresAt: _expiresAt(dmChat(pubkey)));
   }
 
+  /// Encrypts on device (NIP-17 kind 15), uploads the ciphertext, then
+  /// sends the key inside the gift wrap.
+  Future<void> sendFile(
+    String pubkey,
+    Uint8List bytes, {
+    required String mime,
+    required String filename,
+  }) async {
+    if (stateOf(pubkey) != FriendState.friend) {
+      throw StateError('Only friends can be messaged');
+    }
+    final encrypted = await Nip17FileCrypto.encrypt(bytes);
+    final url = await _blossom.upload(encrypted.ciphertext);
+    final metadata = Nip17FileMetadata.fromEncryptedFile(
+      url: Uri.parse(url),
+      mimeType: mime,
+      encryptedFile: encrypted,
+    );
+    final name = ['name', filename];
+    final expiresAt = _expiresAt(dmChat(pubkey));
+    if (expiresAt == null) {
+      await _ndk.dms.sendFileMessage(
+        recipientPubKey: pubkey,
+        metadata: metadata,
+        additionalTags: [name],
+        recipientDmRelayDiscoveryRelays: relays,
+      );
+      return;
+    }
+    await _sendExpiring(
+      pubkey,
+      url,
+      [...metadata.toTags(), name],
+      expiresAt,
+      kind: Dms.kFileMessageKind,
+    );
+  }
+
+  /// The decrypted file of a kind-15 message, fetched once per session.
+  Future<Uint8List> dmFile(Nip17Message message) =>
+      _dmFiles[message.id] ??= () async {
+        try {
+          final metadata =
+              message.fileMetadata ??
+              (throw const FormatException('Not a file message'));
+          return await Nip17FileCrypto.decrypt(
+            ciphertext: await _blossom.download(metadata.url.toString()),
+            metadata: metadata,
+          );
+        } catch (_) {
+          _dmFiles.remove(message.id)?.ignore();
+          rethrow;
+        }
+      }();
+
   Future<void> _send(
     String pubkey,
     String content,
@@ -475,12 +534,13 @@ class Session extends ChangeNotifier {
     String pubkey,
     String content,
     List<List<String>> tags,
-    int expiresAt,
-  ) async {
+    int expiresAt, {
+    int kind = Dms.kMessageKind,
+  }) async {
     final expiration = ['expiration', '$expiresAt'];
     final rumor = await _ndk.giftWrap.createRumor(
       content: content,
-      kind: Dms.kMessageKind,
+      kind: kind,
       tags: [
         ['p', pubkey],
         ...tags,
@@ -559,4 +619,12 @@ class Session extends ChangeNotifier {
     if (id != null) await _ndk.requests.closeSubscription(id);
     await _ndk.destroy();
   }
+}
+
+/// The filename a kind-15 DM carries in its `name` tag.
+String dmFileName(Nip17Message message) {
+  for (final tag in message.rumor.tags) {
+    if (tag case ['name', final String name] when name.isNotEmpty) return name;
+  }
+  return 'file';
 }

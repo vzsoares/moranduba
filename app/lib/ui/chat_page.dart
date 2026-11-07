@@ -1,7 +1,10 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
-import '../core/session.dart';
 import '../core/expiry.dart';
+import '../core/groups/media_types.dart';
+import '../core/session.dart';
+import 'attachments.dart';
 import 'composer.dart';
 import 'expiry_button.dart';
 import 'manga.dart';
@@ -65,15 +68,44 @@ class ChatPage extends StatelessWidget {
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     final m = messages[messages.length - 1 - index];
-                    return MessageRow(text: m.content, outgoing: m.isOutgoing);
+                    final file = m.fileMetadata;
+                    return MessageRow(
+                      text: file == null ? m.content : '',
+                      outgoing: m.isOutgoing,
+                      attachments: [
+                        if (file != null)
+                          AttachmentView(
+                            attachment: Attachment(
+                              id: file.originalSha256,
+                              filename: dmFileName(m),
+                              mime: file.mimeType,
+                              load: () => session.dmFile(m),
+                            ),
+                          ),
+                      ],
+                    );
                   },
                 );
               },
             ),
           ),
-          Composer(onSend: (text) => session.sendText(peer, text)),
+          Composer(
+            onSend: (text) => session.sendText(peer, text),
+            onAttach: _sendAttachment,
+          ),
         ],
       ),
+    );
+  }
+
+  Future<void> _sendAttachment() async {
+    final file = await openFile();
+    if (file == null) return;
+    await session.sendFile(
+      peer,
+      await file.readAsBytes(),
+      mime: mimeForFilename(file.name),
+      filename: file.name,
     );
   }
 }

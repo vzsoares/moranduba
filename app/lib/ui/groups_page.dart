@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:file_selector/file_selector.dart';
 
 import '../core/groups/media_types.dart';
@@ -11,12 +9,12 @@ import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
 import '../core/expiry.dart';
+import 'attachments.dart';
 import 'call_page.dart';
 import 'chat_page.dart';
 import 'composer.dart';
 import 'expiry_button.dart';
 import 'manga.dart';
-import 'media_viewer.dart';
 import 'people.dart';
 import 'theme.dart';
 
@@ -460,148 +458,19 @@ class _Messages extends StatelessWidget {
               : session.displayName(m.sender),
           attachments: [
             for (final media in m.media)
-              if (media.isImage)
-                _EncryptedImage(
-                  key: ValueKey(media.originalHash),
-                  groups: groups,
-                  groupId: groupId,
-                  media: media,
-                )
-              else
-                _FileChip(groups: groups, groupId: groupId, media: media),
+              AttachmentView(
+                attachment: Attachment(
+                  id: media.originalHash,
+                  filename: media.filename,
+                  mime: media.mime,
+                  width: media.width,
+                  height: media.height,
+                  load: () => groups.media(groupId, media),
+                ),
+              ),
           ],
         );
       },
-    );
-  }
-}
-
-/// A non-picture attachment; opens in the viewer.
-class _FileChip extends StatelessWidget {
-  const _FileChip({
-    required this.groups,
-    required this.groupId,
-    required this.media,
-  });
-
-  final Groups groups;
-  final String groupId;
-  final MediaRef media;
-
-  @override
-  Widget build(BuildContext context) {
-    final kind = mediaKind(media.mime);
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 320),
-      child: RowPanel(
-        icon: mediaIcon(kind),
-        title: Text(
-          media.filename,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        line: switch (kind) {
-          MediaKind.video => 'Video · tap to play',
-          MediaKind.audio => 'Audio · tap to play',
-          MediaKind.pdf => 'PDF · tap to open',
-          _ => 'File · tap to open',
-        },
-        onTap: () => showMediaViewer(
-          context,
-          groups: groups,
-          groupId: groupId,
-          media: media,
-        ),
-      ),
-    );
-  }
-}
-
-/// Fetches, decrypts and shows one picture; tap to open, or to retry a failure.
-class _EncryptedImage extends StatefulWidget {
-  const _EncryptedImage({
-    super.key,
-    required this.groups,
-    required this.groupId,
-    required this.media,
-  });
-
-  final Groups groups;
-  final String groupId;
-  final MediaRef media;
-
-  @override
-  State<_EncryptedImage> createState() => _EncryptedImageState();
-}
-
-class _EncryptedImageState extends State<_EncryptedImage> {
-  late Future<Uint8List> _bytes = _load();
-
-  Future<Uint8List> _load() =>
-      widget.groups.media(widget.groupId, widget.media);
-
-  @override
-  Widget build(BuildContext context) {
-    final width = widget.media.width;
-    final height = widget.media.height;
-    final aspect = width != null && height != null && height > 0
-        ? width / height
-        : 4 / 3;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 320, maxHeight: 360),
-      child: AspectRatio(
-        aspectRatio: aspect,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: MangaShape.borderRadius,
-            border: Border.all(width: MangaShape.stroke),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(
-              MangaShape.radius - MangaShape.stroke,
-            ),
-            child: FutureBuilder(
-              future: _bytes,
-              builder: (context, snapshot) {
-                if (snapshot.data case final bytes?) {
-                  return GestureDetector(
-                    onTap: () => showMediaViewer(
-                      context,
-                      groups: widget.groups,
-                      groupId: widget.groupId,
-                      media: widget.media,
-                    ),
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.zoomIn,
-                      child: Image.memory(bytes, fit: BoxFit.cover),
-                    ),
-                  );
-                }
-                if (snapshot.hasError) {
-                  return Material(
-                    color: MangaColors.paper,
-                    child: InkWell(
-                      onTap: () => setState(() => _bytes = _load()),
-                      child: const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.broken_image_outlined),
-                            SizedBox(height: 4),
-                            Text('Tap to retry'),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                }
-                return const Screentone(child: SizedBox.expand());
-              },
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

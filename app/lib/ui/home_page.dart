@@ -237,7 +237,12 @@ class _FriendsTab extends StatelessWidget {
           child: _PersonPanel(
             session: session,
             pubkey: pubkey,
-            line: chat.isEmpty ? 'Say hi' : chat.last.content,
+            line: switch (chat.lastOrNull) {
+              null => 'Say hi',
+              final last when last.fileMetadata != null =>
+                'Sent ${dmFileName(last)}',
+              final last => last.content,
+            },
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
