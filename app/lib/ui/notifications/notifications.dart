@@ -1,17 +1,25 @@
 import 'dart:async';
 
 import '../../core/session.dart';
-import 'notifications_stub.dart'
+import 'notifications_native.dart'
     if (dart.library.js_interop) 'notifications_web.dart'
     as platform;
 
-/// Whether this platform can show notifications yet.
+/// Whether this platform can show notifications.
 bool get notificationsSupported => platform.supported;
 
 bool get notificationsAllowed => platform.allowed;
 
+/// Whether the app's switch can turn notifications off again.
+bool get notificationsRevocable => platform.revocable;
+
+/// Reads the saved switch; call before the first frame.
+Future<void> loadNotifications() => platform.load();
+
 /// Asks the user; returns whether notifications are on.
 Future<bool> askForNotifications() => platform.ask();
+
+Future<void> turnOffNotifications() => platform.turnOff();
 
 /// Shows [session]'s notices while the app is in the background.
 StreamSubscription<Notice> showNotices(Session session) =>

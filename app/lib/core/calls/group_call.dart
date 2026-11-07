@@ -7,6 +7,7 @@ import '../groups/groups.dart';
 import 'call_crypto.dart';
 import 'call_signal.dart';
 import 'mesh_transport.dart';
+import 'screen_capture.dart';
 import 'transport.dart';
 
 /// Above this many other participants, mesh stops sending camera video.
@@ -54,6 +55,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
       resolve,
     );
     await call._openMedia(video: video);
+    await callServiceUpdate(sharing: false);
     await call._rekey();
     call._transport = (transport ?? MeshTransport.new)(call);
     try {
@@ -370,12 +372,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
 
   /// Shares a screen (or any [stream], for tests) in place of the camera.
   Future<void> shareScreen([MediaStream? stream]) async {
-    final screen =
-        stream ??
-        await navigator.mediaDevices.getDisplayMedia({
-          'video': true,
-          'audio': false,
-        });
+    final screen = stream ?? await captureScreen();
     final track = screen.getVideoTracks().firstOrNull;
     if (track == null) return;
     _screen = screen;
@@ -393,6 +390,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     for (final track in screen.getTracks()) {
       await track.stop();
     }
+    await callServiceUpdate(sharing: false);
     localRenderer.srcObject = _camera;
     await _transport.replaceVideo(
       cameraOn ? _camera?.getVideoTracks().firstOrNull : null,
@@ -424,6 +422,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     _ticker?.cancel();
     _groups.removeListener(_onGroupChanged);
     await _transport.close();
+    await callServiceStop();
     for (final stream in [_camera, _screen].nonNulls) {
       for (final track in stream.getTracks()) {
         await track.stop();

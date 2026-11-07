@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -600,16 +601,22 @@ class _NotificationsSwitchState extends State<_NotificationsSwitch> {
     child: SwitchListTile(
       title: const Text('Notify me about new messages'),
       subtitle: Text(
-        _on
-            ? 'While this tab is in the background. Turn off in the '
-                  "browser's site settings."
-            : 'While this tab is in the background.',
+        kIsWeb
+            ? _on
+                  ? 'While this tab is in the background. Turn off in the '
+                        "browser's site settings."
+                  : 'While this tab is in the background.'
+            : 'While Moranduba is in the background.',
       ),
       value: _on,
-      onChanged: _on
+      onChanged: _on && !notificationsRevocable
           ? null
-          : (_) async {
-              final on = await askForNotifications();
+          : (on) async {
+              if (on) {
+                on = await askForNotifications();
+              } else {
+                await turnOffNotifications();
+              }
               if (mounted) setState(() => _on = on);
             },
     ),

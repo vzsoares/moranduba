@@ -3,8 +3,8 @@
 Private group chat with video calls and screen share. No accounts: identity is a
 Nostr key pair. Every call is end-to-end encrypted, whichever mode carries it.
 
-Status: phases 0 and 1 built (groups, chat, picture attachments); desktop
-builds still need a smoke test on each OS.
+Status: phases 0 to 5 built; web is tested end to end. Desktop, Android and
+iOS builds still need a run on each OS (see the phase table).
 Kind numbers and message shapes marked *provisional* are ours and may change.
 
 ## Goals
@@ -211,8 +211,8 @@ and media is DTLS-SRTP plus frame encryption.
 | Platform | Calls | Screen share | Host peer |
 |---|---|---|---|
 | macOS, Windows, Linux | Yes | `getDisplayMedia` via flutter_webrtc desktop capturer | Yes |
-| Android | Yes | MediaProjection + foreground service | No |
-| iOS | Yes | ReplayKit Broadcast Upload Extension (separate target) | No |
+| Android | Yes | MediaProjection + `CallService` (foreground service, also keeps calls alive in the background) | No |
+| iOS | Yes | ReplayKit Broadcast Upload Extension (`ios/Broadcast`, App Group socket to flutter_webrtc) | No |
 | Web | Yes | `getDisplayMedia` | No |
 
 ## Repo layout
@@ -235,7 +235,7 @@ moranduba/
 | 2. Mesh calls | FrameCryptor + MLS call key, audio, video, screen share, auto video cap | Done |
 | 3. SFU | Go SFU, claim + allowlist, simulcast, last-N, embedded TURN, Docker image | Done; image not published |
 | 4. Host peer + switching | Desktop sidecar packaging, mode selection, make-before-break switch | Done; sidecar untested inside real desktop bundles |
-| 5. Platform polish | iOS broadcast extension, Android foreground service, notifications | Not started (needs device builds) |
+| 5. Platform polish | iOS broadcast extension, Android foreground service, native notifications (flutter_local_notifications) | Built; Android, iOS and desktop notifications not yet run on a device |
 
 Added along the way: profiles (name and picture, encrypted), disappearing
 messages (per-chat timer, NIP-40), attachments in DMs (NIP-17 kind 15),

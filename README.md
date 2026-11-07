@@ -34,9 +34,14 @@ build hook compiles the engine for that platform. Per platform:
 | Platform | Needs |
 |---|---|
 | Web | `rustup component add llvm-tools --toolchain 1.98.1`, `cargo install wasm-bindgen-cli --version 0.2.130 --locked` |
-| macOS | Xcode |
+| macOS, iOS | Xcode |
 | Windows | Visual Studio with "Desktop development with C++" |
-| Linux | clang, cmake, ninja, pkg-config, GTK 3 and libsecret dev packages (Arch: `pacman -S clang cmake ninja gtk3 libsecret`) |
+| Linux | clang, cmake, ninja, pkg-config, GTK 3, libsecret and libnotify dev packages (Arch: `pacman -S clang cmake ninja gtk3 libsecret libnotify`) |
+| Android | Android SDK + NDK, `rustup target add aarch64-linux-android` |
+
+iOS: pick your team in Xcode for both the `Runner` and `Broadcast` targets;
+both need the App Group `group.io.github.vzsoares.moranduba` (screen share
+runs in the `Broadcast` extension). Android needs the SDK with an NDK.
 
 Desktop builds can host calls (host peer): after `flutter build <platform>`,
 `./tool/bundle_sfu.sh <platform>` puts the Go SFU next to the app executable

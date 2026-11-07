@@ -6,7 +6,14 @@ bool get supported => true;
 
 bool get allowed => web.Notification.permission == 'granted';
 
+/// Only the browser's site settings take the permission back.
+bool get revocable => false;
+
 bool get inBackground => web.document.hidden;
+
+Future<void> load() async {}
+
+Future<void> turnOff() async {}
 
 Future<bool> ask() async {
   final answer = await web.Notification.requestPermission().toDart;

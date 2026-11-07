@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../core/calls/group_call.dart';
+import '../core/calls/screen_capture.dart';
 import '../core/session.dart';
 import 'manga.dart';
 import 'people.dart';
@@ -17,8 +18,6 @@ bool get _desktop =>
       TargetPlatform.windows,
       TargetPlatform.linux,
     }.contains(defaultTargetPlatform);
-
-bool get canShareScreen => kIsWeb || _desktop;
 
 /// Joins the group's call and shows it; leaving the page hangs up.
 Future<void> openCall(
@@ -384,16 +383,15 @@ class _Controls extends StatelessWidget {
                 active: call.cameraOn,
                 onPressed: () => call.setCamera(!call.cameraOn),
               ),
-            if (canShareScreen)
-              _RoundButton(
-                tooltip: call.sharing ? 'Stop sharing' : 'Share screen',
-                icon: call.sharing
-                    ? Icons.stop_screen_share_outlined
-                    : Icons.screen_share_outlined,
-                active: call.sharing,
-                onPressed: () =>
-                    call.sharing ? call.stopSharing() : _share(context, call),
-              ),
+            _RoundButton(
+              tooltip: call.sharing ? 'Stop sharing' : 'Share screen',
+              icon: call.sharing
+                  ? Icons.stop_screen_share_outlined
+                  : Icons.screen_share_outlined,
+              active: call.sharing,
+              onPressed: () =>
+                  call.sharing ? call.stopSharing() : _share(context, call),
+            ),
             _RoundButton(
               tooltip: 'Hang up',
               icon: Icons.call_end,
@@ -411,11 +409,8 @@ Future<void> _share(BuildContext context, GroupCall call) async {
   final messenger = ScaffoldMessenger.of(context);
   try {
     final MediaStream? stream;
-    if (kIsWeb) {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        'video': true,
-        'audio': false,
-      });
+    if (!_desktop) {
+      stream = await captureScreen();
     } else {
       final source = await showDialog<DesktopCapturerSource>(
         context: context,
