@@ -475,6 +475,63 @@ class LabeledField extends StatelessWidget {
   );
 }
 
+/// One row in a list: a panel with avatar, title, line and trailing actions.
+class RowPanel extends StatelessWidget {
+  const RowPanel({
+    super.key,
+    required this.title,
+    required this.line,
+    this.icon = Icons.person_outline,
+    this.trailing,
+    this.onTap,
+  });
+
+  final Widget title;
+  final String line;
+  final IconData icon;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Panel(
+      padding: EdgeInsets.zero,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Avatar(icon: icon),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      title,
+                      const SizedBox(height: 2),
+                      Text(
+                        line,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                ?trailing,
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Round avatar placeholder: ink ring over screentone.
 class Avatar extends StatelessWidget {
   const Avatar({super.key, this.icon = Icons.person_outline});

@@ -1,0 +1,7 @@
+# Default rules, minus Cargo.lock: crate names like `libcrux-secrets` trip
+# generic-api-key, and the file only holds names, versions and checksums.
+[extend]
+useDefault = true
+
+[allowlist]
+paths = ['''(^|/)Cargo\.lock$''']

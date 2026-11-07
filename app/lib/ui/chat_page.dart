@@ -2,48 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../core/identity.dart';
 import '../core/session.dart';
+import 'composer.dart';
 import 'manga.dart';
 import 'theme.dart';
 
-class ChatPage extends StatefulWidget {
+class ChatPage extends StatelessWidget {
   const ChatPage({super.key, required this.session, required this.peer});
 
   final Session session;
   final String peer;
-
-  @override
-  State<ChatPage> createState() => _ChatPageState();
-}
-
-class _ChatPageState extends State<ChatPage> {
-  final _input = TextEditingController();
-  final _focus = FocusNode();
-  bool _sending = false;
-
-  @override
-  void dispose() {
-    _input.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  Future<void> _send() async {
-    final text = _input.text.trim();
-    if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
-    try {
-      await widget.session.sendText(widget.peer, text);
-      _input.clear();
-      _focus.requestFocus();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Not sent: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +21,7 @@ class _ChatPageState extends State<ChatPage> {
           children: [
             const Avatar(),
             const SizedBox(width: 12),
-            Text(shortKey(widget.peer), style: monoStyle),
+            Text(shortKey(peer), style: monoStyle),
           ],
         ),
       ),
@@ -62,9 +29,9 @@ class _ChatPageState extends State<ChatPage> {
         children: [
           Expanded(
             child: ListenableBuilder(
-              listenable: widget.session,
+              listenable: session,
               builder: (context, _) {
-                final messages = widget.session.chatWith(widget.peer);
+                final messages = session.chatWith(peer);
                 if (messages.isEmpty) {
                   return const EmptyState(
                     icon: Icons.forum_outlined,
@@ -83,62 +50,63 @@ class _ChatPageState extends State<ChatPage> {
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     final m = messages[messages.length - 1 - index];
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Align(
-                        alignment: m.isOutgoing
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 560),
-                          child: Entrance(
-                            child: SpeechBubble(
-                              text: m.content,
-                              outgoing: m.isOutgoing,
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
+                    return MessageRow(text: m.content, outgoing: m.isOutgoing);
                   },
                 );
               },
             ),
           ),
-          DecoratedBox(
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(width: MangaShape.stroke)),
-            ),
-            child: SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _input,
-                        focusNode: _focus,
-                        autofocus: true,
-                        minLines: 1,
-                        maxLines: 5,
-                        textInputAction: TextInputAction.send,
-                        decoration: const InputDecoration(hintText: 'Message'),
-                        onSubmitted: (_) => _send(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton(
-                      onPressed: _sending ? null : _send,
-                      child: const Text('Send'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          Composer(onSend: (text) => session.sendText(peer, text)),
         ],
       ),
     );
   }
+}
+
+/// A speech bubble aligned to its side, with an optional speaker label and
+/// attachments above it.
+class MessageRow extends StatelessWidget {
+  const MessageRow({
+    super.key,
+    required this.text,
+    required this.outgoing,
+    this.speaker,
+    this.attachments = const [],
+  });
+
+  final String text;
+  final bool outgoing;
+  final String? speaker;
+  final List<Widget> attachments;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Align(
+      alignment: outgoing ? Alignment.centerRight : Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Entrance(
+          child: Column(
+            crossAxisAlignment: outgoing
+                ? CrossAxisAlignment.end
+                : CrossAxisAlignment.start,
+            children: [
+              if (speaker case final name?)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, bottom: 4),
+                  child: Text(name, style: monoStyle.copyWith(fontSize: 11)),
+                ),
+              for (final attachment in attachments)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: attachment,
+                ),
+              if (text.isNotEmpty) SpeechBubble(text: text, outgoing: outgoing),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }

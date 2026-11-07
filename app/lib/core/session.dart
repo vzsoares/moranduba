@@ -4,17 +4,25 @@ import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
 import 'friend_list.dart';
+import 'groups/blossom.dart';
+import 'groups/group_engine.dart';
+import 'groups/groups.dart';
 import 'friend_protocol.dart';
 import 'identity.dart';
 import 'relays.dart';
 
-/// One logged-in identity: relay connection, DM inbox and friendships.
+/// One logged-in identity: relay connection, DM inbox, friendships and
+/// groups.
 class Session extends ChangeNotifier {
   Session._(this.identity, this._ndk, this._friendList, this.relays);
 
+  /// Groups stay off when [openGroupEngine] is null or fails; see
+  /// [groupsError].
   static Future<Session> start(
     Identity identity, {
     List<String>? relays,
+    Future<GroupEngine> Function()? openGroupEngine,
+    BlossomClient? blossom,
   }) async {
     final relayList = relays ?? defaultRelays;
     final ndk = Ndk(
@@ -35,17 +43,23 @@ class Session extends ChangeNotifier {
       relayList,
     );
     await session._init();
+    if (openGroupEngine != null) {
+      await session._startGroups(openGroupEngine, blossom);
+    }
     return session;
   }
 
   final Identity identity;
   final List<String> relays;
+  Groups? groups;
+  Object? groupsError;
   final Ndk _ndk;
   final FriendList _friendList;
 
   final Map<String, List<Nip17Message>> _messages = {};
   final Set<String> _seen = {};
   final Set<String> _declined = {};
+  final List<Nip01Event> _unhandledWraps = [];
   Set<String> _storedFriends = {};
   StreamSubscription<Nip01Event>? _inbox;
   String? _subscriptionId;
@@ -69,9 +83,43 @@ class Session extends ChangeNotifier {
     _inbox = response.stream.listen(_onWrapped);
   }
 
+  Future<void> _startGroups(
+    Future<GroupEngine> Function() open,
+    BlossomClient? blossom,
+  ) async {
+    try {
+      final started = Groups(
+        ndk: _ndk,
+        me: identity.publicKey,
+        engine: await open(),
+        relays: relays,
+        blossom: blossom,
+      );
+      await started.start();
+      groups = started;
+      // Welcomes that arrived before groups were up.
+      for (final wrapped in _unhandledWraps) {
+        await started.onGiftWrap(wrapped);
+      }
+    } catch (e) {
+      groupsError = e;
+    }
+    _unhandledWraps.clear();
+    notifyListeners();
+  }
+
   Future<void> _onWrapped(Nip01Event wrapped) async {
     final message = await _ndk.dms.parseWrappedMessage(wrappedEvent: wrapped);
-    if (message == null || !_seen.add(message.id)) return;
+    if (message == null) {
+      final g = groups;
+      if (g != null) {
+        await g.onGiftWrap(wrapped);
+      } else if (groupsError == null) {
+        _unhandledWraps.add(wrapped);
+      }
+      return;
+    }
+    if (!_seen.add(message.id)) return;
     final thread = _messages.putIfAbsent(message.peerPubKey, () => []);
     thread
       ..add(message)
@@ -164,9 +212,16 @@ class Session extends ChangeNotifier {
 
   bool _closed = false;
 
+  /// Closes the session and deletes this identity's group state.
+  Future<void> wipe() async {
+    await groups?.wipe();
+    await close();
+  }
+
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    await groups?.close();
     if (_saveTimer?.isActive ?? false) {
       _saveTimer!.cancel();
       await _save();

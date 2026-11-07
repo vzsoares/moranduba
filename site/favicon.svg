@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="36.80851063829786 24.80851063829786 506.3829787234043 506.3829787234043"><style>svg{color:#000}@media (prefers-color-scheme:dark){svg{color:#fff}}g[mask]{fill:currentColor}g[fill=none]{stroke:currentColor}</style>
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="52" y="40" width="476" height="476">
+      <rect x="52" y="40" width="476" height="476" fill="#fff"/>
+      <path d="M366 210 C372 150 330 84 236 84 C150 84 100 150 100 236 L240 236 L240 206 L256 190 L270 210 L286 190 L300 210 L316 190 L330 210 L346 190 Z" fill="#fff" stroke="#000" stroke-width="9" stroke-linejoin="round" paint-order="stroke"/>
+      <ellipse cx="320" cy="232" rx="13" ry="7" fill="#000"/>
+      <path d="M230 200 C200 150 95 160 80 250 C68 330 110 400 170 405 C215 408 235 380 225 350 C218 330 240 315 240 290 C240 250 250 225 230 200 Z" fill="#fff" stroke="#000" stroke-width="12" stroke-linejoin="round" paint-order="stroke"/>
+      <path d="M205 225 C170 200 120 220 118 275 C116 320 140 350 175 352" fill="none" stroke="#000" stroke-width="12" stroke-linecap="round"/>
+      <circle cx="168" cy="382" r="11" fill="none" stroke="#000" stroke-width="7"/>
+    </mask>
+  </defs>
+  <g mask="url(#cut)">
+    <path d="M150 516 C150 440 120 390 112 330 C100 230 130 120 230 100 C300 88 345 130 350 190 L352 215 C360 235 385 255 392 270 C395 280 380 288 362 290 C366 294 374 296 382 298 L336 322 L374 352 C374 360 364 364 356 368 C362 385 350 405 320 410 C290 414 270 412 262 420 C258 450 262 480 268 516 Z"/>
+    <path d="M366 210 C372 150 330 84 236 84 C150 84 100 150 100 236 L240 236 L240 206 L256 190 L270 210 L286 190 L300 210 L316 190 L330 210 L346 190 Z"/>
+    <path d="M230 200 C200 150 95 160 80 250 C68 330 110 400 170 405 C215 408 235 380 225 350 C218 330 240 315 240 290 C240 250 250 225 230 200 Z"/>
+    <g fill="none" stroke="#000" stroke-width="22" stroke-linecap="round">
+      <path d="M409 280 A75 75 0 0 1 409 360"/>
+      <path d="M443 259 A115 115 0 0 1 443 381"/>
+      <path d="M476 238 A155 155 0 0 1 476 402"/>
+    </g>
+  </g>
+</svg>

@@ -11,7 +11,10 @@ abstract interface class SecretStore {
 class PlatformSecretStore implements SecretStore {
   const PlatformSecretStore();
 
-  static const _storage = FlutterSecureStorage();
+  // The data protection keychain needs a signed build with a keychain group.
+  static const _storage = FlutterSecureStorage(
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+  );
 
   @override
   Future<String?> read(String key) => _storage.read(key: key);

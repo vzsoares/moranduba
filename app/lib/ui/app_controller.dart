@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../core/groups/rust_group_engine.dart';
 import '../core/identity.dart';
 import '../core/identity_store.dart';
 import '../core/session.dart';
@@ -7,8 +8,9 @@ import '../core/session.dart';
 enum AppStage { loading, onboarding, ready, failed }
 
 class AppController extends ChangeNotifier {
-  AppController(this._store);
+  AppController(this._secrets) : _store = IdentityStore(_secrets);
 
+  final SecretStore _secrets;
   final IdentityStore _store;
 
   AppStage stage = AppStage.loading;
@@ -29,7 +31,7 @@ class AppController extends ChangeNotifier {
   Future<void> import(String nsecOrHex) => _adopt(Identity.parse(nsecOrHex));
 
   Future<void> logout() async {
-    await session?.close();
+    await session?.wipe();
     session = null;
     await _store.clear();
     _set(AppStage.onboarding);
@@ -43,7 +45,10 @@ class AppController extends ChangeNotifier {
   Future<void> _open(Identity identity) async {
     _set(AppStage.loading);
     try {
-      session = await Session.start(identity);
+      session = await Session.start(
+        identity,
+        openGroupEngine: () => openGroupEngine(identity, _secrets),
+      );
       _set(AppStage.ready);
     } catch (e) {
       error = e;

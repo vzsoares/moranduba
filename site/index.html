@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Moranduba</title>
+  <meta name="description" content="Private group chat built on Nostr. No accounts. End-to-end encrypted with MLS.">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <style>
+    @font-face { font-family: Bangers; src: url(fonts/Bangers-Regular.ttf); font-display: swap; }
+    @font-face { font-family: ComicNeue; src: url(fonts/ComicNeue-Regular.ttf); font-display: swap; }
+    @font-face { font-family: ComicNeue; src: url(fonts/ComicNeue-Bold.ttf); font-weight: 700; font-display: swap; }
+    @font-face { font-family: JetBrainsMono; src: url(fonts/JetBrainsMono-Variable.ttf); font-display: swap; }
+
+    :root {
+      --paper: #fff;
+      --ink: #000;
+      --charcoal: #1a1a1a;
+      --tone: #ccc;
+      --stroke: 2px;
+      --radius: 8px;
+      --shadow: 0 2px 12px rgba(0, 0, 0, .06);
+      --gutter: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 18px/1.5 ComicNeue, "Comic Sans MS", system-ui, sans-serif;
+    }
+    h1, h2, h3, .display {
+      font-family: Bangers, Impact, sans-serif;
+      font-weight: 400;
+      letter-spacing: .02em;
+      line-height: 1.05;
+      margin: 0;
+    }
+    code, .mono { font-family: JetBrainsMono, ui-monospace, monospace; font-size: .8em; }
+    a { color: inherit; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 var(--gutter); }
+
+    /* Panels: paper, ink border, soft shadow. */
+    .panel {
+      background: var(--paper);
+      border: var(--stroke) solid var(--ink);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    .tone {
+      background-image: radial-gradient(var(--tone) 1.2px, transparent 1.4px);
+      background-size: 7px 7px;
+    }
+    .speed {
+      background:
+        radial-gradient(circle at 50% 50%, var(--paper) 0 26%, transparent 46%),
+        repeating-conic-gradient(from 0deg at 50% 50%, var(--ink) 0 .9deg, transparent .9deg 5deg);
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 22px;
+      border: var(--stroke) solid var(--ink);
+      border-radius: var(--radius);
+      font: 700 17px ComicNeue, sans-serif;
+      text-decoration: none;
+      transition: transform .12s ease, box-shadow .12s ease;
+    }
+    .button.solid { background: var(--charcoal); color: var(--paper); }
+    .button.line { background: var(--paper); }
+    .button:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 var(--ink); }
+    .button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+
+    header {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--paper);
+      border-bottom: var(--stroke) solid var(--ink);
+    }
+    header .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .brand img { width: 34px; height: 34px; }
+    .brand span { font: 28px Bangers, sans-serif; letter-spacing: .03em; }
+    nav { display: flex; align-items: center; gap: 20px; }
+    nav a.link { text-decoration: none; font-weight: 700; }
+    nav a.link:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+
+    /* Hero */
+    .hero { padding: 32px 0 24px; }
+    .hero .panel { padding: 0; }
+    .hero-inner {
+      display: grid; place-items: center; text-align: center;
+      padding: clamp(48px, 9vw, 104px) var(--gutter);
+    }
+    .hero-card {
+      background: var(--paper);
+      border: var(--stroke) solid var(--ink);
+      border-radius: var(--radius);
+      padding: clamp(20px, 4vw, 36px);
+      max-width: 640px;
+    }
+    .hero h1 { font-size: clamp(44px, 8vw, 84px); }
+    .hero p.lede { font-size: clamp(18px, 2.3vw, 21px); margin: 14px 0 24px; }
+    .ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+    .sfx {
+      position: absolute; top: 18px; right: 22px;
+      font: clamp(40px, 7vw, 72px) Bangers, sans-serif;
+      transform: rotate(-8deg);
+      color: var(--paper);
+      -webkit-text-stroke: 2px var(--ink);
+      text-shadow: 4px 4px 0 var(--ink);
+    }
+    .whisper { margin-top: 16px; font-size: 15px; }
+
+    section.wrap { padding-top: 64px; padding-bottom: 8px; scroll-margin-top: 16px; }
+    .kicker { font: 700 15px ComicNeue, sans-serif; text-transform: uppercase; letter-spacing: .12em; }
+    section h2 { font-size: clamp(34px, 5vw, 52px); margin: 6px 0 24px; }
+
+    /* Instructional strip */
+    .strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .step { display: flex; flex-direction: column; }
+    .step .num {
+      position: absolute; top: 0; left: 0;
+      width: 44px; height: 44px; display: grid; place-items: center;
+      background: var(--ink); color: var(--paper);
+      font: 26px Bangers, sans-serif;
+      border-bottom-right-radius: var(--radius);
+    }
+    .step h3 { font-size: 30px; margin: 30px 0 8px; }
+    .step p { margin: 0 0 18px; }
+    .step .art {
+      margin-top: auto; height: 120px;
+      border: var(--stroke) solid var(--ink); border-radius: var(--radius);
+      display: grid; place-items: center; padding: 12px;
+    }
+    .bubble {
+      position: relative; display: inline-block;
+      background: var(--paper);
+      border: var(--stroke) solid var(--ink);
+      border-radius: 18px;
+      padding: 8px 14px;
+      font-weight: 700;
+    }
+    .bubble::after {
+      content: ""; position: absolute; left: 22px; bottom: -11px;
+      width: 16px; height: 16px; background: var(--paper);
+      border-right: var(--stroke) solid var(--ink); border-bottom: var(--stroke) solid var(--ink);
+      transform: rotate(45deg) skew(12deg, 12deg);
+    }
+    .bubble.dark { background: var(--charcoal); color: var(--paper); }
+    .bubble.dark::after { background: var(--charcoal); }
+
+    /* What relays see */
+    .split { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; align-items: stretch; }
+    .split .arrow { display: grid; place-items: center; font: 44px Bangers, sans-serif; }
+    .split h3 { font-size: 26px; margin-bottom: 14px; }
+    .cipher {
+      word-break: break-all;
+      background: var(--charcoal); color: var(--paper);
+      border-radius: var(--radius); padding: 12px; line-height: 1.6;
+    }
+    .note { font-size: 15px; margin-top: 14px; }
+
+    .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .feature h3 { font-size: 26px; margin-bottom: 8px; }
+    .feature p { margin: 0; font-size: 16px; }
+
+    .next { display: grid; grid-template-columns: 1.1fr 1fr; gap: 24px; align-items: center; }
+    .next .badge {
+      display: inline-block; background: var(--ink); color: var(--paper);
+      font: 18px Bangers, sans-serif; letter-spacing: .05em;
+      padding: 2px 10px; border-radius: 4px; transform: rotate(-3deg);
+    }
+    .next h3 { font-size: 36px; margin: 12px 0; }
+    pre {
+      margin: 0; overflow-x: auto;
+      background: var(--charcoal); color: var(--paper);
+      border: var(--stroke) solid var(--ink); border-radius: var(--radius);
+      padding: 16px; font-size: 15px; line-height: 1.6;
+    }
+
+    .platforms { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .platform { text-align: center; }
+    .platform h3 { font-size: 28px; margin-bottom: 6px; }
+    .platform p { margin: 0 0 16px; font-size: 15px; }
+
+    footer { margin-top: 64px; border-top: var(--stroke) solid var(--ink); padding: 28px 0 40px; }
+    footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; font-size: 15px; }
+
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity .5s ease, transform .5s ease; }
+    .reveal.in { opacity: 1; transform: none; }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .reveal { opacity: 1; transform: none; transition: none; }
+      .button { transition: none; }
+    }
+    @media (max-width: 900px) {
+      .strip, .grid4, .platforms { grid-template-columns: repeat(2, 1fr); }
+      .next { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      nav a.link { display: none; }
+      .strip, .grid4, .platforms { grid-template-columns: 1fr; }
+      .split { grid-template-columns: 1fr; }
+      .split .arrow { transform: rotate(90deg); }
+      .panel { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a class="brand" href="#top" aria-label="Moranduba home">
+        <img src="logo.svg" alt="">
+        <span>MORANDUBA</span>
+      </a>
+      <nav>
+        <a class="link" href="#how">How it works</a>
+        <a class="link" href="#privacy">Privacy</a>
+        <a class="button solid" href="app/">Open app</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <div class="wrap hero">
+      <div class="panel speed">
+        <div class="sfx" aria-hidden="true">SHHH!</div>
+        <div class="hero-inner">
+          <div class="hero-card">
+            <h1>Stories told only to your circle</h1>
+            <p class="lede">
+              Private group chat on Nostr. No account, no phone number, no
+              email. Relays carry sealed envelopes and can't read what's in them.
+            </p>
+            <div class="ctas">
+              <a class="button solid" href="app/">Open in your browser</a>
+              <a class="button line" href="#get">Get the desktop app</a>
+            </div>
+            <p class="whisper">Your whole identity: <span class="mono">npub1…</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <section id="how" class="wrap">
+      <div class="kicker">How it works</div>
+      <h2>Three panels, then you're in</h2>
+      <div class="strip">
+        <article class="panel step reveal">
+          <div class="num">1</div>
+          <h3>Make a key</h3>
+          <p>Your identity is a key made on your device. Nobody signs you up, so
+            nobody can sign you out.</p>
+          <div class="art tone"><span class="bubble mono">npub1x7…s7skgs</span></div>
+        </article>
+        <article class="panel step reveal">
+          <div class="num">2</div>
+          <h3>Swap npubs</h3>
+          <p>Add friends by their public key. Your friend list is encrypted too,
+            so relays only see that one exists.</p>
+          <div class="art tone"><span class="bubble">Wants to be your friend!</span></div>
+        </article>
+        <article class="panel step reveal">
+          <div class="num">3</div>
+          <h3>Start a group</h3>
+          <p>Groups run on MLS. Every join or leave moves the group to fresh
+            keys, so old members can't read what comes next.</p>
+          <div class="art tone"><span class="bubble dark">pizza at 8?</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="privacy" class="wrap">
+      <div class="kicker">Privacy</div>
+      <h2>What the relay sees</h2>
+      <div class="split">
+        <div class="panel reveal">
+          <h3>You send</h3>
+          <span class="bubble dark">pizza at 8? bring the cards</span>
+        </div>
+        <div class="arrow" aria-hidden="true">→</div>
+        <div class="panel reveal">
+          <h3>The relay stores</h3>
+          <div class="cipher mono">kind 445 · h 3f9a1c… · signed by a throwaway key ·
+            AgSPq0dV7bT2kx9QmZr1f8w…Lc4=</div>
+        </div>
+      </div>
+      <p class="note">
+        Honest fine print: relays still see timing, size, and the group's random
+        tag. Run your own relay and they see nothing at all.
+      </p>
+    </section>
+
+    <section class="wrap">
+      <div class="grid4">
+        <article class="panel feature reveal">
+          <h3>Private DMs</h3>
+          <p>One-to-one chat as NIP-17 gift wraps: sealed, then wrapped again
+            under a throwaway key.</p>
+        </article>
+        <article class="panel feature reveal">
+          <h3>Encrypted groups</h3>
+          <p>Marmot groups (MLS over Nostr) with forward secrecy and
+            post-compromise security.</p>
+        </article>
+        <article class="panel feature reveal">
+          <h3>Same app everywhere</h3>
+          <p>Windows, macOS, Linux and the browser run the same encryption
+            engine, so everyone shares the same groups.</p>
+        </article>
+        <article class="panel feature reveal">
+          <h3>Open protocol</h3>
+          <p>Built on Nostr. Use public relays, or point your group at your
+            own.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="wrap">
+      <div class="panel tone next reveal">
+        <div>
+          <span class="badge">Coming next</span>
+          <h3>Calls that never leave the circle</h3>
+          <p>
+            Video, voice and screen share, encrypted frame by frame. Run them
+            peer to peer, through a friend's desktop, or through your own
+            server, and switch mid-call without dropping anyone.
+          </p>
+        </div>
+        <pre><code># your own call server, one command
+docker run -d --network host \
+  -v moranduba-sfu:/data \
+  ghcr.io/vzsoares/moranduba-sfu</code></pre>
+      </div>
+    </section>
+
+    <section id="get" class="wrap">
+      <div class="kicker">Get it</div>
+      <h2>Pick a panel</h2>
+      <div class="platforms">
+        <div class="panel platform reveal">
+          <h3>Browser</h3>
+          <p>Nothing to install. Keys stay in this browser.</p>
+          <a class="button solid" href="app/">Open app</a>
+        </div>
+        <div class="panel platform reveal">
+          <h3>macOS</h3>
+          <p>Apple silicon and Intel.</p>
+          <a class="button line" href="https://github.com/vzsoares/moranduba/releases">Releases</a>
+        </div>
+        <div class="panel platform reveal">
+          <h3>Windows</h3>
+          <p>Windows 10 and later.</p>
+          <a class="button line" href="https://github.com/vzsoares/moranduba/releases">Releases</a>
+        </div>
+        <div class="panel platform reveal">
+          <h3>Linux</h3>
+          <p>x86-64 and ARM64.</p>
+          <a class="button line" href="https://github.com/vzsoares/moranduba/releases">Releases</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span><b>Moranduba</b> (Old Tupi): news, stories that are told.</span>
+      <a href="https://github.com/vzsoares/moranduba">Source on GitHub</a>
+    </div>
+  </footer>
+
+  <script>
+    // Panels ink in as they scroll into view.
+    const panels = document.querySelectorAll(".reveal");
+    if ("IntersectionObserver" in window) {
+      const seen = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add("in");
+            seen.unobserve(e.target);
+          }
+        }
+      }, { threshold: 0.15 });
+      panels.forEach((p) => seen.observe(p));
+    } else {
+      panels.forEach((p) => p.classList.add("in"));
+    }
+  </script>
+</body>
+</html>

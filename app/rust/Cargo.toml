@@ -1,0 +1,40 @@
+[package]
+name = "moranduba_mls"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+getrandom = "0.3"
+hex = "0.4"
+mdk-core = { version = "0.8.0", features = ["mip04"] }
+mdk-memory-storage = "0.8.0"
+mdk-storage-traits = "0.8.0"
+openmls_traits = "0.5"
+nostr = { version = "0.44", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+openmls = { version = "0.8.1", default-features = false, features = ["js"] }
+wasm-bindgen = "=0.2.130"
+
+[patch.crates-io]
+mdk-core = { path = "vendor/mdk-core" }
+mdk-memory-storage = { path = "vendor/mdk-memory-storage" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Browser build: smaller download over raw speed.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"

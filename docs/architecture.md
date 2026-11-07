@@ -3,8 +3,9 @@
 Private group chat with video calls and screen share. No accounts: identity is a
 Nostr key pair. Every call is end-to-end encrypted, whichever mode carries it.
 
-Status: design, nothing built yet. Kind numbers and message shapes marked
-*provisional* are ours and may change.
+Status: phases 0 and 1 built (groups, chat, picture attachments); desktop
+builds still need a smoke test on each OS.
+Kind numbers and message shapes marked *provisional* are ours and may change.
 
 ## Goals
 
@@ -14,7 +15,8 @@ Status: design, nothing built yet. Kind numbers and message shapes marked
 - Running your own server is one `docker run` and a paste of an npub.
 - No component outside the group can read messages, files or call media.
 
-Non-goals for v1: web client, calls larger than ~25, recording, public rooms.
+Non-goals for v1: calls larger than ~25, recording, public rooms. The web
+client covers chat; calls on the web come later.
 
 ## System overview
 
@@ -58,9 +60,10 @@ flowchart LR
 
 ## Groups and chat — Marmot (MLS over Nostr)
 
-- Groups use the Marmot protocol (MLS, as in White Noise) through MDK, via the
-  `marmot_dart` binding or our own flutter_rust_bridge wrapper if that binding
-  lags.
+- Groups use the Marmot protocol (MLS) through MDK 0.8, in our own crate
+  (`app/rust/`) that runs as FFI on desktop and as wasm in the browser. See
+  [ADR 0001](adr/0001-mls-engine.md) for why, and for the limits that come
+  with it.
 - MLS gives forward secrecy and post-compromise security, and a new epoch on
   every join, leave or removal.
 - Chat messages are Marmot application messages (kind 445 on relays).
@@ -211,6 +214,8 @@ and media is DTLS-SRTP plus frame encryption.
 ```
 moranduba/
   app/       Flutter client
+    rust/    MLS engine: desktop FFI and browser wasm
+  site/      Landing page
   sfu/       Go SFU (server image + desktop sidecar)
   docs/      This file, ADRs
 ```

@@ -1,78 +1,112 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/groups/group_engine.dart';
+import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
 import 'chat_page.dart';
+import 'groups_page.dart';
 import 'manga.dart';
 import 'theme.dart';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.session, required this.onLogout});
 
   final Session session;
   final Future<void> Function() onLogout;
 
   @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage>
+    with SingleTickerProviderStateMixin {
+  late final _tabs = TabController(length: 3, vsync: this)
+    ..addListener(() => setState(() {}));
+
+  Session get session => widget.session;
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: session,
+      listenable: Listenable.merge([session, ?session.groups]),
       builder: (context, _) {
-        final requests = session.incomingRequests.length;
-        return DefaultTabController(
-          length: 2,
-          child: Scaffold(
-            appBar: AppBar(
-              title: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [Logo(), SizedBox(width: 10), Text('MORANDUBA')],
+        final requests =
+            session.incomingRequests.length +
+            (session.groups?.invites.length ?? 0);
+        return Scaffold(
+          appBar: AppBar(
+            title: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [Logo(), SizedBox(width: 10), Text('MORANDUBA')],
+            ),
+            actions: [
+              IconButton(
+                tooltip: 'My key',
+                icon: const Icon(Icons.key_outlined),
+                onPressed: () => _showIdentity(context),
               ),
-              actions: [
-                IconButton(
-                  tooltip: 'My key',
-                  icon: const Icon(Icons.key_outlined),
-                  onPressed: () => _showIdentity(context),
-                ),
-                const SizedBox(width: 8),
-              ],
-              bottom: TabBar(
-                tabs: [
-                  const Tab(text: 'Friends'),
-                  Tab(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text('Requests'),
-                        if (requests > 0) ...[
-                          const SizedBox(width: 8),
-                          _Badge(count: requests),
-                        ],
+              const SizedBox(width: 8),
+            ],
+            bottom: TabBar(
+              controller: _tabs,
+              tabs: [
+                const Tab(text: 'Friends'),
+                const Tab(text: 'Groups'),
+                Tab(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Requests'),
+                      if (requests > 0) ...[
+                        const SizedBox(width: 8),
+                        _Badge(count: requests),
                       ],
-                    ),
+                    ],
                   ),
+                ),
+              ],
+            ),
+          ),
+          body: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1280),
+              child: TabBarView(
+                controller: _tabs,
+                children: [
+                  _FriendsTab(
+                    session: session,
+                    onAdd: () => _addFriend(context),
+                  ),
+                  GroupsTab(
+                    session: session,
+                    onCreate: () => _newGroup(context),
+                  ),
+                  _RequestsTab(session: session),
                 ],
               ),
             ),
-            body: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1280),
-                child: TabBarView(
-                  children: [
-                    _FriendsTab(
-                      session: session,
-                      onAdd: () => _addFriend(context),
-                    ),
-                    _RequestsTab(session: session),
-                  ],
-                ),
-              ),
-            ),
-            floatingActionButton: FloatingActionButton.extended(
+          ),
+          floatingActionButton: switch (_tabs.index) {
+            0 => FloatingActionButton.extended(
               icon: const Icon(Icons.person_add_alt),
               label: const Text('Add friend'),
               onPressed: () => _addFriend(context),
             ),
-          ),
+            1 when session.groups != null => FloatingActionButton.extended(
+              icon: const Icon(Icons.group_add_outlined),
+              label: const Text('New group'),
+              onPressed: () => _newGroup(context),
+            ),
+            _ => null,
+          },
         );
       },
     );
@@ -90,12 +124,23 @@ class HomePage extends StatelessWidget {
     }
   }
 
+  Future<void> _newGroup(BuildContext context) async {
+    final groupId = await showDialog<String>(
+      context: context,
+      builder: (_) => NewGroupDialog(session: session),
+    );
+    if (groupId != null && context.mounted) {
+      openGroup(context, session, groupId);
+    }
+  }
+
   Future<void> _showIdentity(BuildContext context) =>
       showModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
         isScrollControlled: true,
-        builder: (_) => _IdentitySheet(session: session, onLogout: onLogout),
+        builder: (_) =>
+            _IdentitySheet(session: session, onLogout: widget.onLogout),
       );
 }
 
@@ -122,7 +167,6 @@ class _Badge extends StatelessWidget {
   );
 }
 
-/// One row in a list: a panel with avatar, name, line and trailing actions.
 class _PersonPanel extends StatelessWidget {
   const _PersonPanel({
     required this.pubkey,
@@ -139,43 +183,13 @@ class _PersonPanel extends StatelessWidget {
   final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return Panel(
-      padding: EdgeInsets.zero,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Avatar(icon: icon),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(shortKey(pubkey), style: monoStyle),
-                      const SizedBox(height: 2),
-                      Text(
-                        line,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: text.bodyMedium,
-                      ),
-                    ],
-                  ),
-                ),
-                ?trailing,
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => RowPanel(
+    title: Text(shortKey(pubkey), style: monoStyle),
+    line: line,
+    icon: icon,
+    trailing: trailing,
+    onTap: onTap,
+  );
 }
 
 class _FriendsTab extends StatelessWidget {
@@ -229,14 +243,26 @@ class _RequestsTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final incoming = session.incomingRequests;
     final outgoing = session.outgoingRequests;
-    if (incoming.isEmpty && outgoing.isEmpty) {
+    final groups = session.groups;
+    final invites = groups?.invites ?? const <GroupInvite>[];
+    if (incoming.isEmpty && outgoing.isEmpty && invites.isEmpty) {
       return const EmptyState(
         icon: Icons.mark_email_unread_outlined,
         title: 'ALL QUIET',
-        message: 'Friend requests you send or receive show up here.',
+        message: 'Friend requests and group invites show up here.',
       );
     }
+    final text = Theme.of(context).textTheme;
     final rows = <Widget>[
+      for (final invite in invites)
+        RowPanel(
+          icon: Icons.group_add_outlined,
+          title: Text(invite.groupName, style: text.titleMedium),
+          line:
+              'Group invite from ${shortKey(invite.inviter)} · '
+              '${members(invite.memberCount)}',
+          trailing: _InviteActions(groups: groups!, invite: invite),
+        ),
       for (final pubkey in incoming)
         _PersonPanel(
           pubkey: pubkey,
@@ -269,6 +295,53 @@ class _RequestsTab extends StatelessWidget {
       itemBuilder: (_, i) => Entrance(index: i, child: rows[i]),
     );
   }
+}
+
+class _InviteActions extends StatefulWidget {
+  const _InviteActions({required this.groups, required this.invite});
+
+  final Groups groups;
+  final GroupInvite invite;
+
+  @override
+  State<_InviteActions> createState() => _InviteActionsState();
+}
+
+class _InviteActionsState extends State<_InviteActions> {
+  bool _busy = false;
+
+  Future<void> _run(Future<void> Function() action) async {
+    setState(() => _busy = true);
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    children: [
+      TextButton(
+        onPressed: _busy
+            ? null
+            : () => _run(() => widget.groups.decline(widget.invite.id)),
+        child: const Text('Decline'),
+      ),
+      FilledButton(
+        onPressed: _busy
+            ? null
+            : () => _run(() => widget.groups.accept(widget.invite.id)),
+        child: Text(_busy ? 'Joining…' : 'Join'),
+      ),
+    ],
+  );
 }
 
 class _AddFriendDialog extends StatefulWidget {

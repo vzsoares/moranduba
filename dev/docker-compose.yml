@@ -6,3 +6,11 @@ services:
       - "7777:8080"
     tmpfs:
       - /usr/src/app/db:mode=1777
+
+  blossom:
+    image: oven/bun:1.3
+    command: ["bun", "/srv/server.ts"]
+    volumes:
+      - ./blossom/server.ts:/srv/server.ts:ro
+    ports:
+      - "8800:8800"
