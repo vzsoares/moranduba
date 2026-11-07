@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../groups/group_engine.dart';
 import '../groups/groups.dart';
+import 'call_log.dart';
 import 'call_signal.dart';
 import 'group_call.dart';
 import 'mesh_transport.dart';
@@ -42,6 +43,9 @@ class Calls extends ChangeNotifier {
   /// The group's call server pubkey, or null for mesh.
   String? Function(String groupId)? serverFor;
 
+  /// Records a call's start and end in the group's chat.
+  void Function(String groupId, CallEvent event)? onCallEvent;
+
   /// Why the last call fell back to mesh, for the UI.
   String? serverProblem;
 
@@ -55,7 +59,7 @@ class Calls extends ChangeNotifier {
   }
 
   /// Joins the call running in [groupId], or starts one.
-  Future<GroupCall> join(String groupId, {bool video = true}) async {
+  Future<GroupCall> join(String groupId) async {
     final current = active;
     if (current != null && !current.closed) {
       if (current.groupId == groupId) return current;
@@ -70,13 +74,15 @@ class Calls extends ChangeNotifier {
       groups: _groups,
       groupId: groupId,
       callId: running ?? _newCallId(),
-      video: video,
       transport: transportFactory ?? await _chooseTransport(groupId),
       resolve: transportFactory == null
           ? (mode) => transportFor(groupId, mode)
           : null,
     );
     active = call;
+    if (running == null) {
+      onCallEvent?.call(groupId, CallEvent.started(call.callId));
+    }
     call.addListener(notifyListeners);
     notifyListeners();
     return call;
@@ -122,8 +128,32 @@ class Calls extends ChangeNotifier {
   Future<void> leave() async {
     final call = active;
     active = null;
+    if (call != null && !call.closed) {
+      final alone = call.participants.isEmpty && inCall(call.groupId).isEmpty;
+      if (alone) {
+        onCallEvent?.call(
+          call.groupId,
+          CallEvent.ended(call.callId, seconds: _length(call)),
+        );
+      }
+    }
     await call?.leave();
     notifyListeners();
+  }
+
+  /// From the call's logged start when we have it, else from our joining.
+  int _length(GroupCall call) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final started = _groups
+        .messagesIn(call.groupId)
+        .where((m) => m.call)
+        .where((m) {
+          final event = CallEvent.decode(m.text);
+          return event != null && !event.ended && event.callId == call.callId;
+        })
+        .map((m) => m.createdAt)
+        .firstOrNull;
+    return now - (started ?? call.joinedAt);
   }
 
   void _onSignal(GroupSignal signal) {

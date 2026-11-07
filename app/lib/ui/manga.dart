@@ -601,3 +601,64 @@ class Logo extends StatelessWidget {
     semanticsLabel: 'Moranduba',
   );
 }
+
+/// A bottom sheet that closes by dragging it down or with its close button.
+Future<T?> showPanelSheet<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+}) => showModalBottomSheet<T>(
+  context: context,
+  isScrollControlled: true,
+  builder: (context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      SizedBox(
+        height: 48,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: MangaColors.ink,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Positioned(
+              right: 8,
+              child: IconButton(
+                tooltip: 'Close',
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+      Flexible(child: builder(context)),
+    ],
+  ),
+);
+
+/// An old desk telephone, sized and colored like an [Icon].
+class TelephoneIcon extends StatelessWidget {
+  const TelephoneIcon({super.key, this.size});
+
+  final double? size;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    final side = size ?? theme.size ?? 24;
+    return SvgPicture.asset(
+      'assets/icons/telephone.svg',
+      width: side,
+      height: side,
+      colorFilter: ColorFilter.mode(
+        theme.color ?? MangaColors.ink,
+        BlendMode.srcIn,
+      ),
+    );
+  }
+}

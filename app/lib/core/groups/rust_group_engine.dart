@@ -175,12 +175,14 @@ class RustGroupEngine implements GroupEngine {
     String groupId,
     String text, {
     int? expiresAt,
+    bool call = false,
   }) async {
     final event = _string(
       _call('encrypt_text', {
         'group_id': groupId,
         'text': text,
         'expires_at': ?expiresAt,
+        if (call) 'call': true,
       }),
     );
     await _saveNow();
@@ -434,6 +436,7 @@ GroupMessage _message(Object? json) => switch (json) {
       text: text,
       createdAt: createdAt,
       media: [for (final m in _list(media)) _media(m)],
+      call: json['call'] == true,
     ),
   _ => throw FormatException('message: $json'),
 };

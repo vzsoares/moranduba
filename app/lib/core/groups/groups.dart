@@ -177,11 +177,18 @@ class Groups extends ChangeNotifier {
     _notify();
   });
 
-  /// [expiresAt]: unix seconds, for disappearing messages.
-  Future<void> send(String groupId, String text, {int? expiresAt}) async {
+  /// [expiresAt]: unix seconds, for disappearing messages. [call] sends a
+  /// call event (JSON in [text]) instead of a chat message.
+  Future<void> send(
+    String groupId,
+    String text, {
+    int? expiresAt,
+    bool call = false,
+  }) async {
     final info = _require(groupId);
     final event = await _serial(
-      () => _engine.encryptText(groupId, text, expiresAt: expiresAt),
+      () =>
+          _engine.encryptText(groupId, text, expiresAt: expiresAt, call: call),
     );
     await _publish(_event(event), info.relays);
     await _serial(() => _reloadGroup(groupId));

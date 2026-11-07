@@ -42,7 +42,6 @@ class GroupCall extends ChangeNotifier implements CallHost {
     required Groups groups,
     required String groupId,
     required String callId,
-    bool video = true,
     CallTransport Function(CallHost host)? transport,
     Future<CallTransport Function(CallHost host)> Function(String mode)?
     resolve,
@@ -54,7 +53,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
       await CallCrypto.create(),
       resolve,
     );
-    await call._openMedia(video: video);
+    await call._openMedia();
     await callServiceUpdate(sharing: false);
     await call._rekey();
     call._transport = (transport ?? MeshTransport.new)(call);
@@ -98,7 +97,15 @@ class GroupCall extends ChangeNotifier implements CallHost {
   bool _closed = false;
 
   final Map<String, CallParticipant> participants = {};
+
+  /// Unix seconds.
+  final int joinedAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final localRenderer = RTCVideoRenderer();
+
+  /// The mic, plus the camera track while the camera is on.
+  MediaStream? _local;
+
+  /// The camera's own stream, for the local preview.
   MediaStream? _camera;
   MediaStream? _screen;
   bool micOn = true;
@@ -107,44 +114,29 @@ class GroupCall extends ChangeNotifier implements CallHost {
 
   bool get sharing => _screen != null;
   String get mode => _transport.mode;
-  bool get hasCamera => _camera?.getVideoTracks().isNotEmpty ?? false;
 
   @override
   String get me => _groups.me;
 
   @override
-  MediaStream? get outgoingStream => _camera;
+  MediaStream? get outgoingStream => _local;
 
   @override
   List<MediaStreamTrack> get outgoingTracks => [
-    ...?_camera?.getAudioTracks(),
+    ...?_local?.getAudioTracks(),
     if (_screen?.getVideoTracks().firstOrNull case final screen?)
       screen
     else if (cameraOn)
-      ...?_camera?.getVideoTracks(),
+      ...?_local?.getVideoTracks(),
   ];
 
   MediaState get localMedia =>
       MediaState(audio: micOn, video: cameraOn, screen: sharing);
 
-  Future<void> _openMedia({required bool video}) async {
+  /// Calls start with the mic only; the camera is asked for on first use.
+  Future<void> _openMedia() async {
     await localRenderer.initialize();
-    try {
-      _camera = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
-        'video': video
-            ? {
-                'width': {'ideal': 640},
-                'height': {'ideal': 480},
-              }
-            : false,
-      });
-    } catch (e) {
-      debugPrint('camera unavailable, audio only: $e');
-      _camera = await navigator.mediaDevices.getUserMedia({'audio': true});
-    }
-    cameraOn = hasCamera;
-    localRenderer.srcObject = _camera;
+    _local = await navigator.mediaDevices.getUserMedia({'audio': true});
   }
 
   /// Takes the key for the group's current epoch.
@@ -351,21 +343,51 @@ class GroupCall extends ChangeNotifier implements CallHost {
 
   Future<void> setMic(bool on) async {
     micOn = on;
-    for (final track in _camera?.getAudioTracks() ?? <MediaStreamTrack>[]) {
+    for (final track in _local?.getAudioTracks() ?? <MediaStreamTrack>[]) {
       track.enabled = on;
     }
     await _announce(SignalType.here);
     _notify();
   }
 
+  /// Opens the camera when turned on (the browser asks then) and releases
+  /// it when turned off. Throws when the camera is denied or missing.
   Future<void> setCamera(bool on) async {
-    if (on && !hasCamera) return;
+    final local = _local;
+    if (on == cameraOn || local == null) return;
+    MediaStreamTrack? track;
+    if (on) {
+      final camera = await navigator.mediaDevices.getUserMedia({
+        'audio': false,
+        'video': {
+          'width': {'ideal': 640},
+          'height': {'ideal': 480},
+        },
+      });
+      track = camera.getVideoTracks().firstOrNull;
+      if (track == null) {
+        await camera.dispose();
+        throw StateError('No camera found');
+      }
+      _camera = camera;
+      await local.addTrack(track);
+    } else {
+      final camera = _camera;
+      _camera = null;
+      for (final video in local.getVideoTracks()) {
+        await local.removeTrack(video);
+      }
+      for (final video in camera?.getTracks() ?? <MediaStreamTrack>[]) {
+        await video.stop();
+      }
+      await camera?.dispose();
+    }
     cameraOn = on;
     if (!sharing) {
-      await _transport.replaceVideo(
-        on ? _camera?.getVideoTracks().firstOrNull : null,
-      );
+      localRenderer.srcObject = _camera;
+      await _transport.replaceVideo(track);
     }
+    await callServiceUpdate(sharing: sharing);
     await _announce(SignalType.here);
     _notify();
   }
@@ -393,7 +415,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     await callServiceUpdate(sharing: false);
     localRenderer.srcObject = _camera;
     await _transport.replaceVideo(
-      cameraOn ? _camera?.getVideoTracks().firstOrNull : null,
+      cameraOn ? _local?.getVideoTracks().firstOrNull : null,
     );
     await _announce(SignalType.here);
     _notify();
@@ -423,7 +445,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     _groups.removeListener(_onGroupChanged);
     await _transport.close();
     await callServiceStop();
-    for (final stream in [_camera, _screen].nonNulls) {
+    for (final stream in [_local, _camera, _screen].nonNulls) {
       for (final track in stream.getTracks()) {
         await track.stop();
       }

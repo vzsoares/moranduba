@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moranduba/core/calls/call_log.dart';
 import 'package:moranduba/core/calls/sfu_client.dart';
 import 'package:moranduba/core/expiry.dart';
 import 'package:moranduba/core/groups/blossom.dart';
@@ -227,6 +228,45 @@ void main() {
     await Future<void>.delayed(const Duration(seconds: 5));
     await bob.pruneExpired();
     expect(bobGroups.messagesIn(group.id), isEmpty);
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('call events reach members; the log switch is shared', () async {
+    final ids = [Identity.generate(), Identity.generate()];
+    final [alice, bob] = [
+      for (final id in ids) await _start(id, MemorySnapshotStore()),
+    ];
+    addTearDown(alice.close);
+    addTearDown(bob.close);
+    final group = await alice.groups!.create('calls', [ids[1].publicKey]);
+    final bobGroups = bob.groups!;
+    await _until(bobGroups, () => bobGroups.invites.isNotEmpty);
+    await bobGroups.accept(bobGroups.invites.single.id);
+    final notices = <Notice>[];
+    final listening = bob.notices.listen(notices.add);
+    addTearDown(listening.cancel);
+
+    expect(alice.logsCalls(group.id), isTrue);
+    await alice.groups!.send(
+      group.id,
+      const CallEvent.started('c1').encode(),
+      call: true,
+    );
+    await alice.groups!.send(
+      group.id,
+      const CallEvent.ended('c1', seconds: 42).encode(),
+      call: true,
+    );
+    await _until(
+      bobGroups,
+      () => bobGroups.messagesIn(group.id).where((m) => m.call).length == 2,
+    );
+    final [entry] = withCallLog(bobGroups.messagesIn(group.id));
+    expect(entry is CallLogEntry ? entry.seconds : null, 42);
+    // The start is news, the end is not.
+    expect(notices.map((n) => n.body), ['started a call']);
+
+    await alice.setCallLog(group.id, on: false);
+    await _until(bob, () => !bob.logsCalls(group.id));
   }, timeout: const Timeout(Duration(seconds: 90)));
 
   test(

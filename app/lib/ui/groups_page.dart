@@ -1,19 +1,14 @@
-import 'package:file_selector/file_selector.dart';
-
-import '../core/groups/media_types.dart';
-
 import 'package:flutter/material.dart';
 
 import '../core/groups/group_engine.dart';
 import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
+import '../core/calls/call_log.dart';
 import '../core/expiry.dart';
-import 'attachments.dart';
 import 'call_page.dart';
-import 'chat_page.dart';
-import 'composer.dart';
 import 'expiry_button.dart';
+import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
 import 'server_dialog.dart';
@@ -66,7 +61,7 @@ class GroupsTab extends StatelessWidget {
             line: last == null
                 ? members(info?.memberCount ?? 0)
                 : '${_speaker(session, last.sender)}: '
-                      '${last.text.isEmpty && last.media.isNotEmpty ? 'sent ${last.media.first.filename}' : last.text}',
+                      '${messagePreview(last)}',
             trailing: const Icon(Icons.chevron_right),
             onTap: () => openGroup(context, session, space.id),
           ),
@@ -287,7 +282,7 @@ class GroupChatPage extends StatelessWidget {
               ExpiryButton(session: session, chat: groupChat(groupId)),
               IconButton(
                 tooltip: 'Call',
-                icon: const Icon(Icons.videocam_outlined),
+                icon: const TelephoneIcon(),
                 onPressed: () => openCall(context, session, groupId),
               ),
               IconButton(
@@ -306,6 +301,14 @@ class GroupChatPage extends StatelessWidget {
                     ),
                     child: const Text('Call server…'),
                   ),
+                  CheckedPopupMenuItem(
+                    checked: session.logsCalls(groupId),
+                    onTap: () => session.setCallLog(
+                      groupId,
+                      on: !session.logsCalls(groupId),
+                    ),
+                    child: const Text('Log calls in chat'),
+                  ),
                   PopupMenuItem(
                     onTap: () => _confirmLeave(context, info),
                     child: const Text('Leave group'),
@@ -319,11 +322,7 @@ class GroupChatPage extends StatelessWidget {
             children: [
               _CallBanner(session: session, groupId: groupId),
               Expanded(
-                child: _Messages(session: session, groupId: groupId),
-              ),
-              Composer(
-                onSend: (text) => session.sendToGroup(groupId, text),
-                onAttach: _sendAttachment,
+                child: GroupConversation(session: session, groupId: groupId),
               ),
             ],
           ),
@@ -332,22 +331,9 @@ class GroupChatPage extends StatelessWidget {
     );
   }
 
-  Future<void> _sendAttachment() async {
-    final file = await openFile();
-    if (file == null) return;
-    await session.sendFileToGroup(
-      groupId,
-      await file.readAsBytes(),
-      mime: mimeForFilename(file.name),
-      filename: file.name,
-    );
-  }
-
   Future<void> _showMembers(BuildContext context, GroupInfo info) =>
-      showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
+      showPanelSheet<void>(
+        context,
         builder: (_) => _MembersSheet(session: session, info: info),
       );
 
@@ -424,60 +410,6 @@ class _CallBanner extends StatelessWidget {
               ],
             ),
           ),
-        );
-      },
-    );
-  }
-}
-
-class _Messages extends StatelessWidget {
-  const _Messages({required this.session, required this.groupId});
-
-  final Session session;
-  final String groupId;
-
-  @override
-  Widget build(BuildContext context) {
-    final messages = session.groups!.messagesIn(groupId);
-    if (messages.isEmpty) {
-      return const EmptyState(
-        icon: Icons.forum_outlined,
-        title: 'FIRST WORD',
-        message:
-            'Only members can read this. Each join or leave rolls the '
-            'group to new keys.',
-      );
-    }
-    final me = session.identity.publicKey;
-    final groups = session.groups!;
-    return ListView.builder(
-      reverse: true,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final i = messages.length - 1 - index;
-        final m = messages[i];
-        final outgoing = m.sender == me;
-        final followsSame = i > 0 && messages[i - 1].sender == m.sender;
-        return MessageRow(
-          text: m.text,
-          outgoing: outgoing,
-          speaker: outgoing || followsSame
-              ? null
-              : session.displayName(m.sender),
-          attachments: [
-            for (final media in m.media)
-              AttachmentView(
-                attachment: Attachment(
-                  id: media.originalHash,
-                  filename: media.filename,
-                  mime: media.mime,
-                  width: media.width,
-                  height: media.height,
-                  load: () => groups.media(groupId, media),
-                ),
-              ),
-          ],
         );
       },
     );

@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../core/calls/group_call.dart';
 import '../core/calls/screen_capture.dart';
 import '../core/session.dart';
+import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
 import 'theme.dart';
@@ -48,11 +49,24 @@ Future<void> openCall(
   }
 }
 
-class CallPage extends StatelessWidget {
+class CallPage extends StatefulWidget {
   const CallPage({super.key, required this.session, required this.call});
 
   final Session session;
   final GroupCall call;
+
+  @override
+  State<CallPage> createState() => _CallPageState();
+}
+
+class _CallPageState extends State<CallPage> {
+  /// Wide layouts show the chat beside the tiles unless closed.
+  bool _chatOpen = true;
+
+  static const _sideChatFrom = 900.0;
+
+  Session get session => widget.session;
+  GroupCall get call => widget.call;
 
   @override
   Widget build(BuildContext context) {
@@ -60,42 +74,93 @@ class CallPage extends StatelessWidget {
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) unawaited(session.calls?.leave());
       },
-      child: ListenableBuilder(
-        listenable: call,
-        builder: (context, _) {
-          final name = session.groups?.group(call.groupId)?.name ?? 'Call';
-          return Scaffold(
-            appBar: AppBar(
-              title: Text(name.toUpperCase()),
-              actions: [
-                _ModeSwitch(
-                  call: call,
-                  hasServer: session.serverOf(call.groupId) != null,
-                ),
-                const SizedBox(width: 16),
-              ],
-            ),
-            body: Column(
-              children: [
-                if (call.switching)
-                  const _Notice('Switching how the call travels…'),
-                if (call.switchProblem case final problem?)
-                  _Notice('Could not switch: $problem'),
-                if (call.videoCapped)
-                  const _Notice(
-                    'Big call: cameras pause on mesh. A server keeps them on.',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= _sideChatFrom;
+          return ListenableBuilder(
+            listenable: call,
+            builder: (context, _) {
+              final name = session.groups?.group(call.groupId)?.name ?? 'Call';
+              final stage = Column(
+                children: [
+                  if (call.switching)
+                    const _Notice('Switching how the call travels…'),
+                  if (call.switchProblem case final problem?)
+                    _Notice('Could not switch: $problem'),
+                  if (call.videoCapped)
+                    const _Notice(
+                      'Big call: cameras pause on mesh. A server keeps them on.',
+                    ),
+                  Expanded(
+                    child: _Tiles(session: session, call: call),
                   ),
-                Expanded(
-                  child: _Tiles(session: session, call: call),
+                  _Controls(call: call),
+                ],
+              );
+              return Scaffold(
+                appBar: AppBar(
+                  title: Text(name.toUpperCase()),
+                  actions: [
+                    _ModeSwitch(
+                      call: call,
+                      hasServer: session.serverOf(call.groupId) != null,
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: wide && _chatOpen ? 'Hide chat' : 'Chat',
+                      isSelected: wide && _chatOpen,
+                      icon: const Icon(Icons.chat_bubble_outline),
+                      selectedIcon: const Icon(Icons.chat_bubble),
+                      onPressed: wide
+                          ? () => setState(() => _chatOpen = !_chatOpen)
+                          : () => _showChat(context),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                 ),
-                _Controls(call: call),
-              ],
-            ),
+                body: wide && _chatOpen
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: stage),
+                          const VerticalDivider(
+                            width: MangaShape.stroke,
+                            thickness: MangaShape.stroke,
+                            color: MangaColors.ink,
+                          ),
+                          SizedBox(
+                            width: 360,
+                            child: GroupConversation(
+                              session: session,
+                              groupId: call.groupId,
+                              padding: const EdgeInsets.all(16),
+                            ),
+                          ),
+                        ],
+                      )
+                    : stage,
+              );
+            },
           );
         },
       ),
     );
   }
+
+  Future<void> _showChat(BuildContext context) => showPanelSheet<void>(
+    context,
+    builder: (context) => Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * .7,
+        child: GroupConversation(
+          session: session,
+          groupId: call.groupId,
+          padding: const EdgeInsets.all(16),
+        ),
+      ),
+    ),
+  );
 }
 
 /// The mode badge; a menu to move the whole call to the other mode.
@@ -376,13 +441,12 @@ class _Controls extends StatelessWidget {
               active: call.micOn,
               onPressed: () => call.setMic(!call.micOn),
             ),
-            if (call.hasCamera)
-              _RoundButton(
-                tooltip: call.cameraOn ? 'Stop camera' : 'Start camera',
-                icon: call.cameraOn ? Icons.videocam : Icons.videocam_off,
-                active: call.cameraOn,
-                onPressed: () => call.setCamera(!call.cameraOn),
-              ),
+            _RoundButton(
+              tooltip: call.cameraOn ? 'Stop camera' : 'Start camera',
+              icon: call.cameraOn ? Icons.videocam : Icons.videocam_off,
+              active: call.cameraOn,
+              onPressed: () => _toggleCamera(context, call),
+            ),
             _RoundButton(
               tooltip: call.sharing ? 'Stop sharing' : 'Share screen',
               icon: call.sharing
@@ -403,6 +467,15 @@ class _Controls extends StatelessWidget {
       ),
     ),
   );
+}
+
+Future<void> _toggleCamera(BuildContext context, GroupCall call) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    await call.setCamera(!call.cameraOn);
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Camera unavailable: $e')));
+  }
 }
 
 Future<void> _share(BuildContext context, GroupCall call) async {

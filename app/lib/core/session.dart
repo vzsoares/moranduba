@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
+import 'calls/call_log.dart';
 import 'calls/calls.dart';
 import 'calls/host_peer.dart';
 import 'calls/sfu_book.dart';
@@ -32,6 +33,7 @@ class Session extends ChangeNotifier {
     this.expiries,
     this._blossom,
     this.servers,
+    this.callLogs,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -65,6 +67,8 @@ class Session extends ChangeNotifier {
     await timers.load();
     final sfus = SfuBook(await openStore('${identity.publicKey}-sfu'));
     await sfus.load();
+    final logs = CallLogBook(await openStore('${identity.publicKey}-calllog'));
+    await logs.load();
     final session = Session._(
       identity,
       ndk,
@@ -74,6 +78,7 @@ class Session extends ChangeNotifier {
       timers,
       files,
       sfus,
+      logs,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -95,6 +100,7 @@ class Session extends ChangeNotifier {
   final BlossomClient _blossom;
   final Map<String, Future<Uint8List>> _dmFiles = {};
   final SfuBook servers;
+  final CallLogBook callLogs;
   late final SfuClient sfuClient = SfuClient(
     _ndk,
     me: identity.publicKey,
@@ -161,6 +167,7 @@ class Session extends ChangeNotifier {
       await started.start();
       groups = started;
       calls = Calls(started, sfuClient: sfuClient)
+        ..onCallEvent = _logCall
         ..serverFor = (groupId) => switch (servers.of(groupId).pubkey) {
           '' => null,
           final pubkey => pubkey,
@@ -169,6 +176,7 @@ class Session extends ChangeNotifier {
       started.incoming.listen(_onGroupMessage);
       started.addListener(_shareProfileSoon);
       started.addListener(_announceExpiriesSoon);
+      started.addListener(_announceCallLogsSoon);
       started.addListener(_announceServersSoon);
       started.addListener(_syncAllowlistsSoon);
       // Welcomes that arrived before groups were up.
@@ -240,14 +248,15 @@ class Session extends ChangeNotifier {
 
   void _onGroupMessage(GroupMessage message) {
     if (message.createdAt < _startedAt || _closed) return;
+    // A call's end is no news; its start is.
+    if (message.call && CallEvent.decode(message.text)?.ended != false) return;
     final group = groups?.group(message.groupId)?.name ?? 'Group';
+    final body = messagePreview(message);
     _notices.add(
       Notice(
         chat: groupChat(message.groupId),
         title: '${displayName(message.sender)} · $group',
-        body: message.text.isNotEmpty
-            ? message.text
-            : 'Sent ${message.media.firstOrNull?.filename ?? 'a file'}',
+        body: body.isEmpty ? 'Sent a file' : body,
       ),
     );
   }
@@ -301,6 +310,18 @@ class Session extends ChangeNotifier {
               await servers.markAnnounced(signal.groupId, epoch);
             }
             _syncAllowlistsSoon();
+            if (!_closed) notifyListeners();
+          }),
+        );
+      case {'t': 'calllog', 'log': final Object? json}:
+        final setting = CallLogSetting.fromJson(json);
+        if (setting == null) return;
+        unawaited(
+          callLogs.put(signal.groupId, setting).then((changed) async {
+            if (!changed) return;
+            if (groups?.group(signal.groupId)?.epoch case final epoch?) {
+              await callLogs.markAnnounced(signal.groupId, epoch);
+            }
             if (!_closed) notifyListeners();
           }),
         );
@@ -437,6 +458,67 @@ class Session extends ChangeNotifier {
       });
       _allowSent[sfu] = members;
     }
+  }
+
+  /// Whether [groupId] records calls in its chat.
+  bool logsCalls(String groupId) => callLogs.of(groupId).on;
+
+  /// Turns the call log on or off for everyone in [groupId].
+  Future<void> setCallLog(String groupId, {required bool on}) async {
+    final now = _now();
+    final previous = callLogs.of(groupId).setAt;
+    final setting = CallLogSetting(
+      on: on,
+      setAt: now > previous ? now : previous + 1,
+    );
+    await callLogs.put(groupId, setting);
+    notifyListeners();
+    await _announceCallLog(groupId, setting);
+  }
+
+  Future<void> _announceCallLog(String groupId, CallLogSetting setting) async {
+    final g = groups;
+    if (g == null) return;
+    await g.sendSignal(
+      groupId,
+      jsonEncode({'t': 'calllog', 'log': setting.toJson()}),
+    );
+    if (g.group(groupId)?.epoch case final epoch?) {
+      await callLogs.markAnnounced(groupId, epoch);
+    }
+  }
+
+  /// Members who joined since the setting changed learn it on the next epoch.
+  void _announceCallLogsSoon() {
+    final g = groups;
+    if (g == null || _closed) return;
+    for (final space in g.spaces) {
+      final setting = callLogs.of(space.id);
+      final epoch = g.group(space.id)?.epoch;
+      if (setting.setAt == 0 || epoch == null) continue;
+      if (callLogs.announcedOn(space.id, epoch)) continue;
+      unawaited(
+        callLogs
+            .markAnnounced(space.id, epoch)
+            .then((_) => _announceCallLog(space.id, setting))
+            .catchError((Object e) => debugPrint('announce call log: $e')),
+      );
+    }
+  }
+
+  void _logCall(String groupId, CallEvent event) {
+    final g = groups;
+    if (g == null || _closed || !logsCalls(groupId)) return;
+    unawaited(
+      g
+          .send(
+            groupId,
+            event.encode(),
+            call: true,
+            expiresAt: _expiresAt(groupChat(groupId)),
+          )
+          .catchError((Object e) => debugPrint('log call: $e')),
+    );
   }
 
   /// Sets a chat's disappearing-message timer for everyone in it.
@@ -786,6 +868,7 @@ class Session extends ChangeNotifier {
     await profiles.wipe();
     await expiries.wipe();
     await servers.wipe();
+    await callLogs.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();

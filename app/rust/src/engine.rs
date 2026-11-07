@@ -21,6 +21,8 @@ use serde_json::{json, Value};
 
 const KEY_PACKAGE_KIND: u16 = 30443;
 const CHAT_KIND: u16 = 9;
+/// Call started/ended entries in the chat history (*provisional* kind, ours).
+const CALL_KIND: u16 = 25052;
 /// Call signaling inside the group (*provisional* kind, ours).
 const SIGNAL_KIND: u16 = 25050;
 const SNAPSHOT_MAGIC: &[u8; 4] = b"MSN1";
@@ -71,6 +73,8 @@ struct MessageDto {
     text: String,
     created_at: u64,
     media: Vec<MediaDto>,
+    /// A call event; `text` holds its JSON.
+    call: bool,
 }
 
 /// An encrypted attachment as carried in a message's `imeta` tag (MIP-04).
@@ -297,8 +301,14 @@ impl Engine {
         Ok(json!(members))
     }
 
+    /// `call: true` stores a call event instead of a chat message.
     fn encrypt_text(&self, args: Value) -> Result<Value> {
-        let rumor = EventBuilder::new(Kind::Custom(CHAT_KIND), str_arg(&args, "text")?)
+        let kind = if args["call"].as_bool() == Some(true) {
+            CALL_KIND
+        } else {
+            CHAT_KIND
+        };
+        let rumor = EventBuilder::new(Kind::Custom(kind), str_arg(&args, "text")?)
             .build(self.keys.public_key());
         let event = self
             .mdk
@@ -391,7 +401,7 @@ impl Engine {
             .get_messages(&group_id(&args)?, None)
             .map_err(err)?
             .into_iter()
-            .filter(|m| m.kind == Kind::Custom(CHAT_KIND))
+            .filter(|m| m.kind == Kind::Custom(CHAT_KIND) || m.kind == Kind::Custom(CALL_KIND))
             .collect();
         messages.sort_by_key(|m| (m.created_at, m.processed_at, m.id));
         let dtos: Vec<MessageDto> = messages.iter().map(|m| self.message_dto(m)).collect();
@@ -558,6 +568,7 @@ impl Engine {
             text: m.content.clone(),
             created_at: m.created_at.as_secs(),
             media,
+            call: m.kind == Kind::Custom(CALL_KIND),
         }
     }
 

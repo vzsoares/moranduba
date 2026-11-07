@@ -36,7 +36,13 @@ abstract interface class GroupEngine {
 
   /// Encrypts [text] into a group event (kind 445) ready to publish.
   /// [expiresAt] (unix seconds) adds a NIP-40 tag for relays to honor.
-  Future<String> encryptText(String groupId, String text, {int? expiresAt});
+  /// [call] stores a call event (JSON in [text]) instead of a chat message.
+  Future<String> encryptText(
+    String groupId,
+    String text, {
+    int? expiresAt,
+    bool call = false,
+  });
 
   /// Deletes stored messages created before [before] (unix seconds).
   /// Returns how many went.
@@ -131,6 +137,7 @@ class GroupMessage {
     required this.text,
     required this.createdAt,
     this.media = const [],
+    this.call = false,
   });
 
   final String id;
@@ -141,6 +148,9 @@ class GroupMessage {
   /// Unix seconds, as claimed by the sender.
   final int createdAt;
   final List<MediaRef> media;
+
+  /// A call event rather than a chat message; [text] is its JSON.
+  final bool call;
 }
 
 /// An encrypted attachment from a message's `imeta` tag.

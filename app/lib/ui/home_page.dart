@@ -157,14 +157,10 @@ class _HomePageState extends State<HomePage>
     }
   }
 
-  Future<void> _showIdentity(BuildContext context) =>
-      showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
-        builder: (_) =>
-            _IdentitySheet(session: session, onLogout: widget.onLogout),
-      );
+  Future<void> _showIdentity(BuildContext context) => showPanelSheet<void>(
+    context,
+    builder: (_) => _IdentitySheet(session: session, onLogout: widget.onLogout),
+  );
 }
 
 class _Badge extends StatelessWidget {

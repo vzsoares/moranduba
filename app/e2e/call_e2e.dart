@@ -141,6 +141,7 @@ Future<void> _alice() async {
     _log('server set');
   }
   final call = await session.calls!.join(group!.id);
+  await call.setCamera(true);
   await _connected(session, call, peer);
   _log('video from bob');
   if (_split) {
@@ -204,6 +205,7 @@ Future<void> _bob() async {
     () => session.calls!.inCall(groupId).contains(peer),
   );
   final call = await session.calls!.join(groupId);
+  await call.setCamera(true);
   await _connected(session, call, peer);
   _log('video from alice');
 

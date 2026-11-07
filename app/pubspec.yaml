@@ -39,6 +39,7 @@ flutter:
 
   assets:
     - assets/brand/logo.svg
+    - assets/icons/telephone.svg
 
   fonts:
     - family: Bangers

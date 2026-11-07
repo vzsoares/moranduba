@@ -15,6 +15,9 @@ class MeshTransport implements CallTransport {
   final CallHost _host;
   final List<Map<String, String>> iceServers;
   final Map<String, RTCPeerConnection> _links = {};
+
+  /// Senders that already have a frame encryptor; one per sender.
+  final Set<String> _encrypted = {};
   final Set<String> _dialing = {};
   bool _closed = false;
 
@@ -99,6 +102,7 @@ class MeshTransport implements CallTransport {
       final sender = stream == null
           ? await pc.addTrack(track)
           : await pc.addTrack(track, stream);
+      _encrypted.add(sender.senderId);
       await _host.crypto.encrypt(sender, _host.me);
     }
     if (!_host.outgoingTracks.any((t) => t.kind == 'video')) {
@@ -159,9 +163,8 @@ class MeshTransport implements CallTransport {
         final sender = transceiver.sender;
         final kind = sender.track?.kind ?? transceiver.receiver.track?.kind;
         if (kind != 'video') continue;
-        final hadTrack = sender.track != null;
         await sender.replaceTrack(track);
-        if (!hadTrack && track != null) {
+        if (track != null && _encrypted.add(sender.senderId)) {
           await _host.crypto.encrypt(sender, _host.me);
         }
       }
