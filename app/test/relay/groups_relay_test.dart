@@ -6,6 +6,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moranduba/core/expiry.dart';
 import 'package:moranduba/core/groups/blossom.dart';
 import 'package:moranduba/core/groups/groups.dart';
 import 'package:moranduba/core/groups/mls_bridge.dart';
@@ -43,6 +44,7 @@ Future<Session> _start(
   relays: _relays,
   blossom: blossom,
   profileStore: MemorySnapshotStore(),
+  expiryStore: MemorySnapshotStore(),
   openGroupEngine: () => RustGroupEngine.open(
     bridge: const NativeMlsBridge(),
     secretKey: identity.privateKey,
@@ -191,6 +193,39 @@ void main() {
     await _until(carolGroups, () => carolGroups.invites.isNotEmpty);
     await carolGroups.accept(carolGroups.invites.single.id);
     await _until(carol, () => carol.displayName(ids[0].publicKey) == 'Alice');
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('group timers reach late joiners and prune history', () async {
+    final ids = [Identity.generate(), Identity.generate(), Identity.generate()];
+    final [alice, bob, carol] = [
+      for (final id in ids) await _start(id, MemorySnapshotStore()),
+    ];
+    for (final s in [alice, bob, carol]) {
+      addTearDown(s.close);
+    }
+    final group = await alice.groups!.create('brief', [ids[1].publicKey]);
+    final chat = groupChat(group.id);
+    final bobGroups = bob.groups!;
+    await _until(bobGroups, () => bobGroups.invites.isNotEmpty);
+    await bobGroups.accept(bobGroups.invites.single.id);
+
+    await alice.setExpiry(chat, 4);
+    await _until(bob, () => bob.expiryOf(chat).seconds == 4);
+    await alice.sendToGroup(group.id, 'short lived');
+    await _until(
+      bobGroups,
+      () => bobGroups.messagesIn(group.id).any((m) => m.text == 'short lived'),
+    );
+
+    await alice.groups!.addMembers(group.id, [ids[2].publicKey]);
+    final carolGroups = carol.groups!;
+    await _until(carolGroups, () => carolGroups.invites.isNotEmpty);
+    await carolGroups.accept(carolGroups.invites.single.id);
+    await _until(carol, () => carol.expiryOf(chat).seconds == 4);
+
+    await Future<void>.delayed(const Duration(seconds: 5));
+    await bob.pruneExpired();
+    expect(bobGroups.messagesIn(group.id), isEmpty);
   }, timeout: const Timeout(Duration(seconds: 90)));
 
   test('creating a group with someone who has no key package fails', () async {

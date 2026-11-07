@@ -4,7 +4,7 @@ use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use mdk_core::encrypted_media::{EncryptedMediaUpload, MediaReference};
 use mdk_core::groups::NostrGroupConfigData;
-use mdk_core::messages::MessageProcessingResult;
+use mdk_core::messages::{EventTag, MessageProcessingResult};
 use mdk_core::MDK;
 use mdk_memory_storage::{MdkMemoryStorage, MemoryStorageSnapshot};
 use mdk_storage_traits::groups::types::{Group, GroupState};
@@ -12,7 +12,8 @@ use mdk_storage_traits::groups::GroupStorage;
 use mdk_storage_traits::messages::types::Message;
 use mdk_storage_traits::GroupId;
 use nostr::{
-    Event, EventBuilder, EventId, JsonUtil, Keys, Kind, PublicKey, RelayUrl, TagKind, UnsignedEvent,
+    Event, EventBuilder, EventId, JsonUtil, Keys, Kind, PublicKey, RelayUrl, TagKind, Timestamp,
+    UnsignedEvent,
 };
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,13 @@ pub type Result<T> = std::result::Result<T, String>;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// NIP-40 tag from an optional `expires_at` (unix seconds), so relays that
+/// honor it drop the event.
+fn expiration(args: &Value) -> Option<Vec<EventTag>> {
+    let at = args["expires_at"].as_u64()?;
+    Some(vec![EventTag::expiration(Timestamp::from(at))])
 }
 
 pub struct Engine {
@@ -135,6 +143,7 @@ impl Engine {
             "decrypt_media" => self.decrypt_media(args),
             "send_signal" => self.send_signal(args),
             "export_secret" => self.export_secret(args),
+            "prune" => self.prune(args),
             _ => Err(format!("unknown method {method}")),
         }
     }
@@ -293,9 +302,18 @@ impl Engine {
             .build(self.keys.public_key());
         let event = self
             .mdk
-            .create_message(&group_id(&args)?, rumor, None)
+            .create_message(&group_id(&args)?, rumor, expiration(&args))
             .map_err(err)?;
         Ok(json!(event.as_json()))
+    }
+
+    /// Deletes messages created before `before` (unix seconds).
+    fn prune(&self, args: Value) -> Result<Value> {
+        let before = args["before"].as_u64().ok_or("missing before")?;
+        let deleted = self
+            .storage()
+            .delete_messages_before(&group_id(&args)?, Timestamp::from(before));
+        Ok(json!(deleted))
     }
 
     /// `publish` is set when processing produced a commit (an auto-committed
@@ -456,7 +474,10 @@ impl Engine {
         let rumor = EventBuilder::new(Kind::Custom(CHAT_KIND), str_arg(&args, "caption")?)
             .tag(imeta)
             .build(self.keys.public_key());
-        let event = self.mdk.create_message(&gid, rumor, None).map_err(err)?;
+        let event = self
+            .mdk
+            .create_message(&gid, rumor, expiration(&args))
+            .map_err(err)?;
         Ok(json!(event.as_json()))
     }
 

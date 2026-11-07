@@ -429,3 +429,66 @@ fn any_file_round_trips() {
         );
     }
 }
+
+#[test]
+fn expiring_messages_carry_nip40_and_prune_for_good() {
+    let alice = Peer::new();
+    let mut bob = Peer::new();
+    let created = alice.call(
+        "create_group",
+        json!({ "name": "brief", "relays": RELAYS, "key_packages": [bob.key_package()] }),
+    );
+    let group = created["group"]["id"].as_str().unwrap().to_string();
+    bob.join(&created["welcomes"][0]);
+
+    let event = alice
+        .call(
+            "encrypt_text",
+            json!({ "group_id": group, "text": "gone soon", "expires_at": 4_000_000_000u64 }),
+        )
+        .as_str()
+        .unwrap()
+        .to_string();
+    let parsed = Event::from_json(&event).unwrap();
+    let expiration = parsed
+        .tags
+        .iter()
+        .find(|t| t.as_slice()[0] == "expiration")
+        .expect("expiration tag");
+    assert_eq!(expiration.as_slice()[1], "4000000000");
+    bob.call("receive", json!({ "event": event }));
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let kept = bob.call("prune", json!({ "group_id": group, "before": now - 60 }));
+    assert_eq!(kept, json!(0));
+    let deleted = bob.call("prune", json!({ "group_id": group, "before": now + 60 }));
+    assert_eq!(deleted, json!(1));
+    assert_eq!(
+        bob.call("messages", json!({ "group_id": group })),
+        json!([])
+    );
+
+    // Gone after a restart, and a relay replay does not bring it back.
+    bob.restart();
+    assert_eq!(
+        bob.call("messages", json!({ "group_id": group })),
+        json!([])
+    );
+    let _ = call(
+        bob.handle,
+        "receive",
+        &json!({ "event": event }).to_string(),
+    );
+    assert_eq!(
+        bob.call("messages", json!({ "group_id": group })),
+        json!([])
+    );
+
+    // Still talking afterwards.
+    let reply = send(&bob, &group, "still here");
+    let got = alice.call("receive", json!({ "event": reply }));
+    assert_eq!(got["message"]["text"], json!("still here"));
+}

@@ -10,9 +10,11 @@ import '../core/groups/group_engine.dart';
 import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
+import '../core/expiry.dart';
 import 'call_page.dart';
 import 'chat_page.dart';
 import 'composer.dart';
+import 'expiry_button.dart';
 import 'manga.dart';
 import 'media_viewer.dart';
 import 'people.dart';
@@ -248,7 +250,7 @@ class GroupChatPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final groups = session.groups!;
     return ListenableBuilder(
-      listenable: groups,
+      listenable: Listenable.merge([groups, session]),
       builder: (context, _) {
         final info = groups.group(groupId);
         if (info == null) {
@@ -283,6 +285,7 @@ class GroupChatPage extends StatelessWidget {
               ],
             ),
             actions: [
+              ExpiryButton(session: session, chat: groupChat(groupId)),
               IconButton(
                 tooltip: 'Call',
                 icon: const Icon(Icons.videocam_outlined),
@@ -312,8 +315,8 @@ class GroupChatPage extends StatelessWidget {
                 child: _Messages(session: session, groupId: groupId),
               ),
               Composer(
-                onSend: (text) => groups.send(groupId, text),
-                onAttach: () => _sendAttachment(groups),
+                onSend: (text) => session.sendToGroup(groupId, text),
+                onAttach: _sendAttachment,
               ),
             ],
           ),
@@ -322,10 +325,10 @@ class GroupChatPage extends StatelessWidget {
     );
   }
 
-  Future<void> _sendAttachment(Groups groups) async {
+  Future<void> _sendAttachment() async {
     final file = await openFile();
     if (file == null) return;
-    await groups.sendFile(
+    await session.sendFileToGroup(
       groupId,
       await file.readAsBytes(),
       mime: mimeForFilename(file.name),

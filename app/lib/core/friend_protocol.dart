@@ -6,7 +6,10 @@ enum Control {
   friendAccept('friend_accept'),
 
   /// Content is the sender's profile JSON.
-  profile('profile');
+  profile('profile'),
+
+  /// Content is the chat's disappearing-message timer JSON.
+  expiry('expiry');
 
   const Control(this.wire);
 
@@ -50,7 +53,7 @@ FriendState friendStateFrom({
         } else {
           requestedByThem = true;
         }
-      case Control.profile:
+      case Control.profile || Control.expiry:
         break;
     }
   }

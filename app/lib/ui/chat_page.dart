@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../core/session.dart';
+import '../core/expiry.dart';
 import 'composer.dart';
+import 'expiry_button.dart';
 import 'manga.dart';
 import 'people.dart';
 import 'theme.dart';
@@ -29,6 +31,14 @@ class ChatPage extends StatelessWidget {
             ],
           ),
         ),
+        actions: [
+          ListenableBuilder(
+            listenable: session,
+            builder: (context, _) =>
+                ExpiryButton(session: session, chat: dmChat(peer)),
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: Column(
         children: [

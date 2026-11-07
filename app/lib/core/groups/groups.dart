@@ -173,9 +173,12 @@ class Groups extends ChangeNotifier {
     _notify();
   });
 
-  Future<void> send(String groupId, String text) async {
+  /// [expiresAt]: unix seconds, for disappearing messages.
+  Future<void> send(String groupId, String text, {int? expiresAt}) async {
     final info = _require(groupId);
-    final event = await _serial(() => _engine.encryptText(groupId, text));
+    final event = await _serial(
+      () => _engine.encryptText(groupId, text, expiresAt: expiresAt),
+    );
     await _publish(_event(event), info.relays);
     await _serial(() => _reloadGroup(groupId));
   }
@@ -187,6 +190,7 @@ class Groups extends ChangeNotifier {
     required String mime,
     required String filename,
     String caption = '',
+    int? expiresAt,
   }) async {
     final info = _require(groupId);
     final encrypted = await _serial(
@@ -200,6 +204,7 @@ class Groups extends ChangeNotifier {
         caption: caption,
         url: url,
         upload: encrypted.upload,
+        expiresAt: expiresAt,
       ),
     );
     await _publish(_event(event), info.relays);
@@ -217,6 +222,14 @@ class Groups extends ChangeNotifier {
           rethrow;
         }
       }();
+
+  /// Deletes this group's messages created before [before] (unix seconds).
+  Future<void> prune(String groupId, int before) async {
+    final deleted = await _serial(() => _engine.prune(groupId, before));
+    if (deleted == 0) return;
+    _messages[groupId]?.removeWhere((m) => m.createdAt < before);
+    _notify();
+  }
 
   Future<void> leave(String groupId) async {
     final info = _require(groupId);

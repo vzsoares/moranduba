@@ -171,12 +171,33 @@ class RustGroupEngine implements GroupEngine {
 
   /// Saved before returning: a lost send ratchet step would reuse a key.
   @override
-  Future<String> encryptText(String groupId, String text) async {
+  Future<String> encryptText(
+    String groupId,
+    String text, {
+    int? expiresAt,
+  }) async {
     final event = _string(
-      _call('encrypt_text', {'group_id': groupId, 'text': text}),
+      _call('encrypt_text', {
+        'group_id': groupId,
+        'text': text,
+        'expires_at': ?expiresAt,
+      }),
     );
     await _saveNow();
     return event;
+  }
+
+  @override
+  Future<int> prune(String groupId, int before) async {
+    final deleted = switch (_call('prune', {
+      'group_id': groupId,
+      'before': before,
+    })) {
+      final int n => n,
+      final other => throw FormatException('prune: $other'),
+    };
+    if (deleted > 0) await _saveNow();
+    return deleted;
   }
 
   @override
@@ -254,6 +275,7 @@ class RustGroupEngine implements GroupEngine {
     required String caption,
     required String url,
     required Map<String, Object?> upload,
+    int? expiresAt,
   }) async {
     final event = _string(
       _call('send_media', {
@@ -261,6 +283,7 @@ class RustGroupEngine implements GroupEngine {
         'caption': caption,
         'url': url,
         'upload': upload,
+        'expires_at': ?expiresAt,
       }),
     );
     await _saveNow();

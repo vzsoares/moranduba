@@ -35,7 +35,12 @@ abstract interface class GroupEngine {
   Future<List<String>> members(String groupId);
 
   /// Encrypts [text] into a group event (kind 445) ready to publish.
-  Future<String> encryptText(String groupId, String text);
+  /// [expiresAt] (unix seconds) adds a NIP-40 tag for relays to honor.
+  Future<String> encryptText(String groupId, String text, {int? expiresAt});
+
+  /// Deletes stored messages created before [before] (unix seconds).
+  /// Returns how many went.
+  Future<int> prune(String groupId, int before);
 
   /// Processes a group event (kind 445).
   Future<GroupReceipt> receive(String eventJson);
@@ -57,6 +62,7 @@ abstract interface class GroupEngine {
     required String caption,
     required String url,
     required Map<String, Object?> upload,
+    int? expiresAt,
   });
 
   Future<Uint8List> decryptMedia(

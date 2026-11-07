@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use mdk_storage_traits::GroupId;
-use nostr::{EventId, JsonUtil};
+use nostr::{EventId, JsonUtil, Timestamp};
 #[cfg(test)]
 use nostr::{Kind, Tags, Timestamp, UnsignedEvent};
 
@@ -66,6 +66,28 @@ fn validate_message_payload(message: &Message) -> Result<(), MessageError> {
     validate_size(event_json.as_bytes(), MAX_EVENT_JSON_SIZE, "Event JSON")?;
 
     Ok(())
+}
+
+impl MdkMemoryStorage {
+    /// Deletes a group's messages created before `before`, for disappearing
+    /// messages. Returns how many went.
+    pub fn delete_messages_before(&self, group_id: &GroupId, before: Timestamp) -> usize {
+        let mut guard = self.inner.write();
+        let inner = &mut *guard;
+        let expired: Vec<EventId> = inner
+            .messages_cache
+            .iter()
+            .filter(|(_, msg)| &msg.mls_group_id == group_id && msg.created_at < before)
+            .map(|(eid, _)| *eid)
+            .collect();
+        for event_id in &expired {
+            inner.messages_cache.pop(event_id);
+        }
+        if let Some(group_messages) = inner.messages_by_group_cache.get_mut(group_id) {
+            group_messages.retain(|_, msg| msg.created_at >= before);
+        }
+        expired.len()
+    }
 }
 
 impl MessageStorage for MdkMemoryStorage {

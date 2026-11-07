@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
 import 'calls/calls.dart';
+import 'expiry.dart';
 import 'friend_list.dart';
 import 'friend_protocol.dart';
 import 'groups/blossom.dart';
@@ -25,6 +26,7 @@ class Session extends ChangeNotifier {
     this._friendList,
     this.relays,
     this.profiles,
+    this.expiries,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -35,6 +37,7 @@ class Session extends ChangeNotifier {
     Future<GroupEngine> Function()? openGroupEngine,
     BlossomClient? blossom,
     SnapshotStore? profileStore,
+    SnapshotStore? expiryStore,
   }) async {
     final files = blossom ?? BlossomClient();
     final relayList = relays ?? defaultRelays;
@@ -54,25 +57,37 @@ class Session extends ChangeNotifier {
       files,
     );
     await book.load();
+    final timers = ExpiryBook(
+      expiryStore ?? await openSnapshotStore('${identity.publicKey}-expiry'),
+    );
+    await timers.load();
     final session = Session._(
       identity,
       ndk,
       FriendList(ndk, relays: relayList),
       relayList,
       book,
+      timers,
     );
     await session._init();
     if (openGroupEngine != null) {
       await session._startGroups(openGroupEngine, files);
     }
     session._shareProfileSoon();
+    session._pruneTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => unawaited(session.pruneExpired()),
+    );
+    unawaited(session.pruneExpired());
     return session;
   }
 
   final Identity identity;
   final List<String> relays;
   final ProfileBook profiles;
+  final ExpiryBook expiries;
   Timer? _profileTimer;
+  Timer? _pruneTimer;
   Groups? groups;
   Calls? calls;
   Object? groupsError;
@@ -123,6 +138,7 @@ class Session extends ChangeNotifier {
       calls = Calls(started);
       started.signals.listen(_onGroupSignal);
       started.addListener(_shareProfileSoon);
+      started.addListener(_announceExpiriesSoon);
       // Welcomes that arrived before groups were up.
       for (final wrapped in _unhandledWraps) {
         await started.onGiftWrap(wrapped);
@@ -146,11 +162,21 @@ class Session extends ChangeNotifier {
       return;
     }
     if (!_seen.add(message.id)) return;
-    if (Control.of(message.rumor) == Control.profile && !message.isOutgoing) {
-      final profile = Profile.decode(message.content);
-      if (profile != null && await profiles.put(message.peerPubKey, profile)) {
-        notifyListeners();
-      }
+    switch (Control.of(message.rumor)) {
+      case Control.profile when !message.isOutgoing:
+        final profile = Profile.decode(message.content);
+        if (profile != null &&
+            await profiles.put(message.peerPubKey, profile)) {
+          notifyListeners();
+        }
+      case Control.expiry:
+        final timer = ChatExpiry.decode(message.content);
+        if (timer != null &&
+            await expiries.put(dmChat(message.peerPubKey), timer)) {
+          unawaited(pruneExpired());
+          notifyListeners();
+        }
+      case _:
     }
     final thread = _messages.putIfAbsent(message.peerPubKey, () => []);
     thread
@@ -194,19 +220,131 @@ class Session extends ChangeNotifier {
   }
 
   void _onGroupSignal(GroupSignal signal) {
-    if (jsonDecode(signal.payload) case {
-      't': 'profile',
-      'profile': final Object? json,
-    }) {
-      final profile = Profile.fromJson(json);
-      if (profile == null) return;
+    switch (jsonDecode(signal.payload)) {
+      case {'t': 'profile', 'profile': final Object? json}:
+        final profile = Profile.fromJson(json);
+        if (profile == null) return;
+        unawaited(
+          profiles.put(signal.sender, profile).then((changed) {
+            if (changed && !_closed) notifyListeners();
+          }),
+        );
+      case {'t': 'expiry', 'timer': final Object? json}:
+        final timer = ChatExpiry.fromJson(json);
+        if (timer == null) return;
+        unawaited(
+          expiries.put(groupChat(signal.groupId), timer).then((changed) async {
+            if (!changed) return;
+            // They announced it on this epoch already.
+            if (groups?.group(signal.groupId)?.epoch case final epoch?) {
+              await expiries.markAnnounced(groupChat(signal.groupId), epoch);
+            }
+            if (!_closed) notifyListeners();
+            await pruneExpired();
+          }),
+        );
+    }
+  }
+
+  ChatExpiry expiryOf(String chat) => expiries.of(chat);
+
+  /// Sets a chat's disappearing-message timer for everyone in it.
+  /// [chat] comes from [dmChat] or [groupChat].
+  Future<void> setExpiry(String chat, int seconds) async {
+    final now = _now();
+    final timer = ChatExpiry(
+      seconds: seconds,
+      setAt: now > expiries.of(chat).setAt ? now : expiries.of(chat).setAt + 1,
+    );
+    await expiries.put(chat, timer);
+    notifyListeners();
+    await _announceExpiry(chat, timer);
+    await pruneExpired();
+  }
+
+  Future<void> _announceExpiry(String chat, ChatExpiry timer) async {
+    final [kind, id] = chat.split(':');
+    if (kind == 'dm') {
+      await _send(id, jsonEncode(timer.toJson()), Control.expiry.tags);
+      return;
+    }
+    final g = groups;
+    if (g == null) return;
+    await g.sendSignal(
+      id,
+      jsonEncode({'t': 'expiry', 'timer': timer.toJson()}),
+    );
+    if (g.group(id)?.epoch case final epoch?) {
+      await expiries.markAnnounced(chat, epoch);
+    }
+  }
+
+  /// Members who joined since the timer was set learn it on the next epoch.
+  void _announceExpiriesSoon() {
+    final g = groups;
+    if (g == null || _closed) return;
+    for (final space in g.spaces) {
+      final chat = groupChat(space.id);
+      final timer = expiries.of(chat);
+      final epoch = g.group(space.id)?.epoch;
+      if (timer.setAt == 0 || epoch == null) continue;
+      if (expiries.announcedOn(chat, epoch)) continue;
       unawaited(
-        profiles.put(signal.sender, profile).then((changed) {
-          if (changed && !_closed) notifyListeners();
-        }),
+        expiries
+            .markAnnounced(chat, epoch)
+            .then((_) => _announceExpiry(chat, timer))
+            .catchError((Object e) => debugPrint('announce expiry: $e')),
       );
     }
   }
+
+  /// Unix seconds before which [chat]'s messages are gone, or null.
+  int? _cutoff(String chat) {
+    final timer = expiries.of(chat);
+    return timer.isOn ? _now() - timer.seconds : null;
+  }
+
+  int? _expiresAt(String chat) {
+    final timer = expiries.of(chat);
+    return timer.isOn ? _now() + timer.seconds : null;
+  }
+
+  /// Drops expired messages from every chat with a timer.
+  Future<void> pruneExpired() async {
+    if (_closed) return;
+    var changed = false;
+    for (final MapEntry(key: chat) in expiries.active.toList()) {
+      final cutoff = _cutoff(chat);
+      if (cutoff == null) continue;
+      final [kind, id] = chat.split(':');
+      if (kind == 'group') {
+        await groups?.prune(id, cutoff);
+      } else {
+        final before = _messages[id]?.length ?? 0;
+        _messages[id]?.removeWhere(
+          (m) => m.createdAt < cutoff && Control.of(m.rumor) == null,
+        );
+        changed |= (_messages[id]?.length ?? 0) != before;
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  Future<void> sendToGroup(String groupId, String text) =>
+      groups!.send(groupId, text, expiresAt: _expiresAt(groupChat(groupId)));
+
+  Future<void> sendFileToGroup(
+    String groupId,
+    Uint8List bytes, {
+    required String mime,
+    required String filename,
+  }) => groups!.sendFile(
+    groupId,
+    bytes,
+    mime: mime,
+    filename: filename,
+    expiresAt: _expiresAt(groupChat(groupId)),
+  );
 
   /// Batches profile sends while friends and groups load.
   void _shareProfileSoon() {
@@ -266,11 +404,15 @@ class Session extends ChangeNotifier {
     ..._messages.keys,
   }.where((pubkey) => stateOf(pubkey) == state).toList();
 
-  /// Chat messages with [pubkey], oldest first, without control messages.
-  List<Nip17Message> chatWith(String pubkey) => [
-    for (final m in _messages[pubkey] ?? const <Nip17Message>[])
-      if (Control.of(m.rumor) == null) m,
-  ];
+  /// Chat messages with [pubkey], oldest first, without control messages
+  /// or expired ones.
+  List<Nip17Message> chatWith(String pubkey) {
+    final cutoff = _cutoff(dmChat(pubkey)) ?? 0;
+    return [
+      for (final m in _messages[pubkey] ?? const <Nip17Message>[])
+        if (Control.of(m.rumor) == null && m.createdAt >= cutoff) m,
+    ];
+  }
 
   /// Our profile goes along, so they see who is asking.
   Future<void> requestFriend(String pubkey, {String note = ''}) async {
@@ -307,16 +449,77 @@ class Session extends ChangeNotifier {
     if (stateOf(pubkey) != FriendState.friend) {
       throw StateError('Only friends can be messaged');
     }
-    return _send(pubkey, text, const []);
+    return _send(pubkey, text, const [], expiresAt: _expiresAt(dmChat(pubkey)));
   }
 
-  Future<void> _send(String pubkey, String content, List<List<String>> tags) =>
-      _ndk.dms.sendMessage(
+  Future<void> _send(
+    String pubkey,
+    String content,
+    List<List<String>> tags, {
+    int? expiresAt,
+  }) {
+    if (expiresAt == null) {
+      return _ndk.dms.sendMessage(
         recipientPubKey: pubkey,
         content: content,
         additionalTags: tags,
         recipientDmRelayDiscoveryRelays: relays,
       );
+    }
+    return _sendExpiring(pubkey, content, tags, expiresAt);
+  }
+
+  /// NIP-17 with a NIP-40 tag on the wraps too, which ndk's sendMessage
+  /// cannot add, so relays drop the sealed copies when it passes.
+  Future<void> _sendExpiring(
+    String pubkey,
+    String content,
+    List<List<String>> tags,
+    int expiresAt,
+  ) async {
+    final expiration = ['expiration', '$expiresAt'];
+    final rumor = await _ndk.giftWrap.createRumor(
+      content: content,
+      kind: Dms.kMessageKind,
+      tags: [
+        ['p', pubkey],
+        ...tags,
+        expiration,
+      ],
+    );
+    Future<Nip01Event> wrapFor(String recipient) async => GiftWrap.wrapEvent(
+      recipientPublicKey: recipient,
+      sealEvent: await _ndk.giftWrap.sealRumor(
+        rumor: rumor,
+        recipientPubkey: recipient,
+      ),
+      additionalTags: [expiration],
+      eventSignerFactory: _ndk.giftWrap.eventSignerFactory,
+      randomizeCreatedAtBefore: rumor.createdAt,
+    );
+    final theirRelays = await _ndk.userRelayLists.getDmRelays(
+      pubkey,
+      forceRefresh: true,
+      discoveryRelays: relays,
+    );
+    final sent = await Future.wait([
+      _ndk.broadcast
+          .broadcast(
+            nostrEvent: await wrapFor(pubkey),
+            specificRelays: theirRelays ?? relays,
+          )
+          .broadcastDoneFuture,
+      _ndk.broadcast
+          .broadcast(
+            nostrEvent: await wrapFor(identity.publicKey),
+            specificRelays: relays,
+          )
+          .broadcastDoneFuture,
+    ]);
+    if (!sent.first.any((r) => r.broadcastSuccessful)) {
+      throw StateError('No relay accepted the message');
+    }
+  }
 
   /// Batches friend-list writes while history is still streaming in.
   void _scheduleSave() {
@@ -329,9 +532,12 @@ class Session extends ChangeNotifier {
 
   bool _closed = false;
 
+  static int _now() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
   /// Closes the session and deletes this identity's group state.
   Future<void> wipe() async {
     await profiles.wipe();
+    await expiries.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
@@ -341,6 +547,7 @@ class Session extends ChangeNotifier {
     if (_closed) return;
     _closed = true;
     _profileTimer?.cancel();
+    _pruneTimer?.cancel();
     await calls?.close();
     await groups?.close();
     if (_saveTimer?.isActive ?? false) {
