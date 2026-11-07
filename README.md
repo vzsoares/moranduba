@@ -86,3 +86,8 @@ Serve it from any static host; `.wasm` must go out as `application/wasm`.
 
 UI follows the "Manga Instructional Comic" DESIGN.md. Fonts are Bangers,
 Comic Neue and JetBrains Mono (all OFL, bundled in `app/assets/fonts`).
+
+## License
+
+MIT, see [LICENSE](LICENSE). Vendored `app/rust/vendor/mdk-core` keeps its
+own MIT license.
