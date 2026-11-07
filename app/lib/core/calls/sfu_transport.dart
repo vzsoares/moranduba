@@ -38,12 +38,14 @@ class SfuTransport implements CallTransport {
     required this.client,
     required this.sfu,
     required this.iceServers,
+    this.mode = 'server',
   });
 
   final CallHost _host;
   final SfuClient client;
 
   /// The SFU's pubkey, hex.
+  @override
   final String sfu;
   final List<Map<String, Object>> iceServers;
 
@@ -59,8 +61,9 @@ class SfuTransport implements CallTransport {
   /// Active speakers the SFU reported, loudest first.
   List<String> speakers = const [];
 
+  /// `server`, or `host_peer` when the SFU runs on a member's desktop.
   @override
-  String get mode => 'server';
+  final String mode;
 
   @override
   Future<void> start() async {
@@ -100,22 +103,15 @@ class SfuTransport implements CallTransport {
       streams: streams,
       sendEncodings: _layers,
     );
-    // Without a camera the slot still exists, for a later screen share.
-    final video = camera == null
-        ? await pc.addTransceiver(
-            kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
-            init: init,
-          )
-        : await pc.addTransceiver(
-            track: camera,
-            kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
-            init: init,
-          );
+    // Without a camera the slot still exists, for a later camera or screen.
+    final (video, encrypted) = await addEncryptedVideo(
+      pc,
+      _host,
+      init: init,
+      track: camera,
+    );
     _video = video.sender;
-    if (camera != null) {
-      await _host.crypto.encrypt(video.sender, _host.me);
-      _videoEncrypted = true;
-    }
+    _videoEncrypted = encrypted;
 
     pc.onTrack = _onTrack;
     pc.onConnectionState = (state) {
@@ -224,7 +220,7 @@ class SfuTransport implements CallTransport {
   Future<void> replaceVideo(MediaStreamTrack? track) async {
     final sender = _video;
     if (sender == null) return;
-    await sender.replaceTrack(track);
+    await replaceTrackSettled(sender, track);
     if (track != null && !_videoEncrypted) {
       await _host.crypto.encrypt(sender, _host.me);
       _videoEncrypted = true;

@@ -303,7 +303,7 @@ void main() {
   }, timeout: const Timeout(Duration(seconds: 90)));
 
   test(
-    'a desktop hosts calls: sidecar starts, gets claimed, lets members in',
+    'a desktop hosts calls: sidecar starts, gets listed, lets members in',
     () async {
       final dataDir = await Directory.systemTemp.createTemp('sfu');
       addTearDown(() => dataDir.delete(recursive: true));
@@ -322,12 +322,17 @@ void main() {
       final sfu = alice.hosting!.identity.pubkey;
       expect(alice.ownsServer(sfu), isTrue);
       expect((await alice.pingServer(sfu))['owner'], isTrue);
-      await _until(bob, () => bob.serverOf(group.id) == sfu);
+      expect(alice.hostsCallsFor(group.id), isTrue);
+      await _until(bob, () => bob.hostsOf(group.id).contains(sfu));
+      expect(bob.serverOf(group.id), isNull);
       final deadline = DateTime.now().add(const Duration(seconds: 15));
       while ((await bob.pingServer(sfu))['allowed'] != true) {
         if (DateTime.now().isAfter(deadline)) fail('bob never allowed');
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
+
+      await alice.unhostCalls(group.id);
+      await _until(bob, () => bob.hostsOf(group.id).isEmpty);
 
       await alice.stopHosting();
       await expectLater(bob.pingServer(sfu), throwsA(isA<SfuException>()));

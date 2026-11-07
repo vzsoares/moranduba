@@ -43,7 +43,10 @@ class GroupCall extends ChangeNotifier implements CallHost {
     required String groupId,
     required String callId,
     CallTransport Function(CallHost host)? transport,
-    Future<CallTransport Function(CallHost host)> Function(String mode)?
+    Future<CallTransport Function(CallHost host)> Function(
+      String mode,
+      String? sfu,
+    )?
     resolve,
   }) async {
     final call = GroupCall._(
@@ -80,8 +83,12 @@ class GroupCall extends ChangeNotifier implements CallHost {
   final CallCrypto crypto;
   late CallTransport _transport;
 
-  /// Builds transports for mode switches; null when switching is off.
-  final Future<CallTransport Function(CallHost host)> Function(String mode)?
+  /// Builds transports for mode switches, through the SFU when named;
+  /// null when switching is off.
+  final Future<CallTransport Function(CallHost host)> Function(
+    String mode,
+    String? sfu,
+  )?
   _resolve;
   int _switchSeq = 0;
   String _switchFrom = '';
@@ -174,7 +181,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
         _applyVideoCap();
         await _transport.participantSeen(from);
         await _transport.participantMedia(from, signal.media);
-        _fallBackIfSplit(signal.mode);
+        _fallBackIfSplit(signal.mode, signal.sfu);
       case SignalType.leave:
         await _transport.participantLeft(from);
       case SignalType.offer || SignalType.answer:
@@ -194,7 +201,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
         if (!newer) break;
         _switchSeq = signal.seq;
         _switchFrom = from;
-        await _applyMode(mode);
+        await _applyMode(mode, signal.sfu);
     }
     _notify();
   }
@@ -203,44 +210,57 @@ class GroupCall extends ChangeNotifier implements CallHost {
 
   DateTime _lastSwitch = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// Someone could not reach the server and called on mesh; mesh works for
-  /// everyone, so the whole call moves there. Heartbeats sent just before a
-  /// switch still carry the old mode, hence the grace period.
-  void _fallBackIfSplit(String? theirMode) {
-    if (theirMode != 'mesh' || _transport.mode == 'mesh') return;
-    if (switching || !canSwitch) return;
+  /// Someone could not reach our SFU and called on mesh, or reached a
+  /// different one; mesh works for everyone, so the whole call moves there.
+  /// Heartbeats sent just before a switch still carry the old mode, hence
+  /// the grace period.
+  void _fallBackIfSplit(String? theirMode, String? theirSfu) {
+    final mine = _transport.sfu;
+    if (theirMode == null || mine == null) return;
+    final split = theirMode == 'mesh' || (theirSfu != null && theirSfu != mine);
+    if (!split || switching || !canSwitch) return;
     final since = DateTime.now().difference(_lastSwitch);
     if (since < const Duration(seconds: 20)) return;
     unawaited(switchMode('mesh'));
   }
 
-  /// Moves everyone in the call to [mode] (`mesh` or `server`).
-  Future<void> switchMode(String mode) async {
-    _switchSeq += 1;
-    _switchFrom = me;
-    await signal(
-      CallSignal(
-        type: SignalType.switchMode,
-        callId: callId,
-        mode: mode,
-        seq: _switchSeq,
-        media: localMedia,
-      ),
-    );
-    await _applyMode(mode);
-  }
+  /// Moves everyone in the call to [mode]. Outside mesh, the switch names
+  /// the SFU we reached so everyone uses the same one.
+  Future<void> switchMode(String mode) =>
+      _applyMode(mode, null, announce: true);
 
   /// Make before break: the new transport carries media before the old one
   /// closes. Local tracks and keys stay as they are.
-  Future<void> _applyMode(String mode) async {
+  Future<void> _applyMode(
+    String mode,
+    String? sfu, {
+    bool announce = false,
+  }) async {
     final resolve = _resolve;
-    if (resolve == null || _closed || mode == _transport.mode) return;
+    if (resolve == null || _closed) return;
+    if (mode == _transport.mode && (sfu == null || sfu == _transport.sfu)) {
+      return;
+    }
     _lastSwitch = DateTime.now();
     switching = true;
     switchProblem = null;
     _notify();
     try {
-      final next = (await resolve(mode))(this);
+      final next = (await resolve(mode, sfu))(this);
+      if (announce) {
+        _switchSeq += 1;
+        _switchFrom = me;
+        await signal(
+          CallSignal(
+            type: SignalType.switchMode,
+            callId: callId,
+            mode: mode,
+            sfu: next.sfu,
+            seq: _switchSeq,
+            media: localMedia,
+          ),
+        );
+      }
       try {
         await next.start();
       } catch (_) {
@@ -281,6 +301,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
       callId: callId,
       media: localMedia,
       mode: _transport.mode,
+      sfu: _transport.sfu,
     ),
   );
 
@@ -424,6 +445,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
   /// Link and crypto state, for the UI and the end-to-end tests.
   Future<Map<String, Object?>> stats() async => {
     'mode': mode,
+    'sfu': ?_transport.sfu,
     'keyIndex': crypto.keyIndex,
     'epoch': _keyEpoch,
     'links': {

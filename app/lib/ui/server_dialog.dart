@@ -8,7 +8,8 @@ import '../core/session.dart';
 import 'manga.dart';
 import 'theme.dart';
 
-/// Picks the group's call server (`server` mode), or direct calls (mesh).
+/// Picks the group's call server (`server` mode), or direct calls (mesh),
+/// and offers this desktop as a host peer.
 class ServerDialog extends StatefulWidget {
   const ServerDialog({super.key, required this.session, required this.groupId});
 
@@ -79,8 +80,12 @@ class _ServerDialogState extends State<ServerDialog> {
   Future<String> _host() async {
     final support = await getApplicationSupportDirectory();
     await session.hostCalls(widget.groupId, dataDir: '${support.path}/sfu');
-    if (mounted) Navigator.of(context).pop();
-    return 'Hosting';
+    return 'Hosting calls for this group while the app is open.';
+  }
+
+  Future<String> _unhost() async {
+    await session.unhostCalls(widget.groupId);
+    return 'No longer hosting for this group.';
   }
 
   Future<String> _direct() async {
@@ -92,6 +97,8 @@ class _ServerDialogState extends State<ServerDialog> {
   @override
   Widget build(BuildContext context) {
     final current = session.serverOf(widget.groupId);
+    final hosts = session.hostsOf(widget.groupId).length;
+    final hostingHere = session.hostsCallsFor(widget.groupId);
     final text = Theme.of(context).textTheme;
     return PopScope(
       canPop: !_busy,
@@ -111,6 +118,19 @@ class _ServerDialogState extends State<ServerDialog> {
                     : 'Calls in this group go through this server when it '
                           'is online, and directly between members when not.',
               ),
+              if (hosts > 0) ...[
+                const SizedBox(height: 8),
+                Text(
+                  [
+                    hosts == 1
+                        ? "1 member's computer hosts calls"
+                        : "$hosts members' computers host calls",
+                    if (current != null) ' when the server is offline',
+                    '.',
+                  ].join(),
+                  style: text.bodySmall,
+                ),
+              ],
               const SizedBox(height: 16),
               LabeledField(
                 label: 'Server npub',
@@ -130,11 +150,13 @@ class _ServerDialogState extends State<ServerDialog> {
                 OutlinedButton.icon(
                   icon: const Icon(Icons.computer, size: 18),
                   label: Text(
-                    session.hosting == null
-                        ? 'Host calls on this computer'
-                        : 'Use the server this computer hosts',
+                    hostingHere
+                        ? 'Stop hosting calls on this computer'
+                        : 'Host calls on this computer',
                   ),
-                  onPressed: _busy ? null : () => _run(_host),
+                  onPressed: _busy
+                      ? null
+                      : () => _run(hostingHere ? _unhost : _host),
                 ),
               ],
               if (_status case final status?) ...[

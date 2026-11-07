@@ -18,11 +18,47 @@ const _signalMaxAge = Duration(seconds: 60);
 const _presenceTimeout = Duration(seconds: 45);
 
 class _Presence {
-  _Presence(this.callId);
+  _Presence(this.callId, this.mode, this.sfu);
 
   final String callId;
+  String? mode;
+  String? sfu;
   DateTime lastSeen = DateTime.now();
 }
+
+/// The first SFU in [candidates] (mode, pubkey) that answers and knows us,
+/// with its `pong`. All are pinged at once, so a dead first choice costs
+/// one ping timeout, not one per candidate.
+Future<({String mode, String sfu, Map<String, Object?> pong})?> pickSfu(
+  List<(String, String)> candidates, {
+  required Future<Map<String, Object?>> Function(String sfu) ping,
+  void Function(String mode, Object problem)? onProblem,
+}) async {
+  Future<Map<String, Object?>?> probe(String mode, String sfu) async {
+    try {
+      final pong = await ping(sfu);
+      if (pong['allowed'] == true) return pong;
+      onProblem?.call(mode, _notAllowed(mode));
+    } catch (e) {
+      onProblem?.call(mode, e);
+    }
+    return null;
+  }
+
+  final probes = [for (final (mode, sfu) in candidates) probe(mode, sfu)];
+  for (final (i, (mode, sfu)) in candidates.indexed) {
+    if (await probes[i] case final pong?) {
+      return (mode: mode, sfu: sfu, pong: pong);
+    }
+  }
+  return null;
+}
+
+SfuException _notAllowed(String mode) => SfuException(
+  mode == 'host_peer'
+      ? 'The host peer does not know you yet'
+      : 'The call server does not know you yet',
+);
 
 /// Who is in a call in each group, and the one call we are in.
 class Calls extends ChangeNotifier {
@@ -42,6 +78,16 @@ class Calls extends ChangeNotifier {
 
   /// The group's call server pubkey, or null for mesh.
   String? Function(String groupId)? serverFor;
+
+  /// The group's opted-in host peers, in order of preference.
+  List<String> Function(String groupId)? hostsFor;
+
+  /// Pings an SFU; tests swap it to make one unreachable.
+  late Future<Map<String, Object?>> Function(String sfu) ping = (sfu) =>
+      switch (sfuClient) {
+        final client? => client.request(sfu, {'type': 'ping'}),
+        null => Future.error(const SfuException('Calls have no SFU client')),
+      };
 
   /// Records a call's start and end in the group's chat.
   void Function(String groupId, CallEvent event)? onCallEvent;
@@ -66,17 +112,22 @@ class Calls extends ChangeNotifier {
       await leave();
     }
     final cutoff = DateTime.now().subtract(_presenceTimeout);
-    final running = (_presence[groupId] ?? const {}).values
+    final live = (_presence[groupId] ?? const {}).values
         .where((p) => p.lastSeen.isAfter(cutoff))
-        .map((p) => p.callId)
-        .firstOrNull;
+        .toList();
+    final running = live.firstOrNull;
     final call = await GroupCall.start(
       groups: _groups,
       groupId: groupId,
-      callId: running ?? _newCallId(),
-      transport: transportFactory ?? await _chooseTransport(groupId),
+      callId: running?.callId ?? _newCallId(),
+      transport:
+          transportFactory ??
+          await _chooseTransport(
+            groupId,
+            live.where((p) => p.callId == running?.callId).toList(),
+          ),
       resolve: transportFactory == null
-          ? (mode) => transportFor(groupId, mode)
+          ? (mode, sfu) => transportFor(groupId, mode, sfu)
           : null,
     );
     active = call;
@@ -88,15 +139,33 @@ class Calls extends ChangeNotifier {
     return call;
   }
 
-  /// `server` when the group's SFU answers a ping in time and knows us,
-  /// else mesh.
+  /// A running call keeps the route its participants are on. A new one
+  /// takes the group's server, else a host peer, else mesh.
   Future<CallTransport Function(CallHost host)> _chooseTransport(
     String groupId,
+    List<_Presence> others,
   ) async {
     serverProblem = null;
-    if (serverFor?.call(groupId) == null) return MeshTransport.new;
+    final List<(String, String)> candidates;
+    if (others.isNotEmpty) {
+      final theirs = [
+        for (final p in others)
+          if ((p.mode, p.sfu ?? serverFor?.call(groupId))
+              case (final String mode, final String sfu) when mode != 'mesh')
+            (mode, sfu),
+      ].firstOrNull;
+      candidates = [?theirs];
+    } else {
+      final server = serverFor?.call(groupId);
+      candidates = [
+        if (server != null) ('server', server),
+        for (final host in hostsFor?.call(groupId) ?? const <String>[])
+          if (host != server) ('host_peer', host),
+      ];
+    }
+    if (candidates.isEmpty) return MeshTransport.new;
     try {
-      return await transportFor(groupId, 'server');
+      return await _through(candidates);
     } catch (e) {
       serverProblem = '$e';
       debugPrint('call server: $e');
@@ -104,25 +173,56 @@ class Calls extends ChangeNotifier {
     }
   }
 
-  /// A transport for [mode] in [groupId]. Throws when `server` is not
-  /// reachable or does not know us.
+  /// A transport for [mode] in [groupId], through [sfu] when given, else
+  /// through the group's server or first answering host peer. Throws when
+  /// none answers and knows us.
   Future<CallTransport Function(CallHost host)> transportFor(
     String groupId,
-    String mode,
+    String mode, [
+    String? sfu,
+  ]) async {
+    if (mode == 'mesh') return MeshTransport.new;
+    final candidates = switch ((mode, sfu)) {
+      (_, final String sfu) => [(mode, sfu)],
+      ('server', null) => [
+        if (serverFor?.call(groupId) case final server?) (mode, server),
+      ],
+      ('host_peer', null) => [
+        for (final host in hostsFor?.call(groupId) ?? const <String>[])
+          (mode, host),
+      ],
+      _ => throw SfuException('Unknown call mode $mode'),
+    };
+    if (candidates.isEmpty) {
+      throw SfuException(
+        mode == 'host_peer'
+            ? 'Nobody hosts calls for this group'
+            : 'This group has no call server',
+      );
+    }
+    return _through(candidates);
+  }
+
+  Future<CallTransport Function(CallHost host)> _through(
+    List<(String, String)> candidates,
   ) async {
-    if (mode != 'server') return MeshTransport.new;
-    final sfu = serverFor?.call(groupId);
     final client = sfuClient;
-    if (sfu == null || client == null) {
-      throw const SfuException('This group has no call server');
-    }
-    final pong = await client.request(sfu, {'type': 'ping'});
-    if (pong['allowed'] != true) {
-      throw const SfuException('The call server does not know you yet');
-    }
-    final iceServers = iceServersFrom(pong);
-    return (CallHost host) =>
-        SfuTransport(host, client: client, sfu: sfu, iceServers: iceServers);
+    if (client == null) throw const SfuException('Calls have no SFU client');
+    Object? problem;
+    final picked = await pickSfu(
+      candidates,
+      ping: ping,
+      onProblem: (_, e) => problem ??= e,
+    );
+    if (picked == null) throw problem ?? const SfuException('No SFU answered');
+    final iceServers = iceServersFrom(picked.pong);
+    return (CallHost host) => SfuTransport(
+      host,
+      client: client,
+      sfu: picked.sfu,
+      iceServers: iceServers,
+      mode: picked.mode,
+    );
   }
 
   Future<void> leave() async {
@@ -167,9 +267,20 @@ class Calls extends ChangeNotifier {
     final group = _presence.putIfAbsent(signal.groupId, () => {});
     switch (decoded.type) {
       case SignalType.join || SignalType.here:
-        group[signal.sender] = _Presence(decoded.callId);
+        group[signal.sender] = _Presence(
+          decoded.callId,
+          decoded.mode,
+          decoded.sfu,
+        );
       case SignalType.leave:
         group.remove(signal.sender);
+      case SignalType.switchMode:
+        for (final p in group.values) {
+          if (p.callId != decoded.callId) continue;
+          p
+            ..mode = decoded.mode
+            ..sfu = decoded.sfu;
+        }
       default:
         break;
     }

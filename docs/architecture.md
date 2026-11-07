@@ -90,15 +90,16 @@ Channel  { id, space_id, kind: text | voice, mls_group_id }
 - MLS cost grows with members, so spaces above ~100 members need their own
   design pass.
 
-Space settings (MLS application message, *provisional* shape):
+Call servers travel as one MLS application message, re-sent on each new
+epoch so new members learn them. Each value is last-writer-wins by
+`set_at`; host peers merge per pubkey, and only a host's own desktop opts
+it in or out.
 
 ```json
 {
-  "type": "moranduba.settings",
-  "space_id": "…",
-  "preferred_sfu": "npub1…",
-  "host_peers": ["npub1…"],
-  "relays": ["wss://…"]
+  "t": "sfu",
+  "sfu": { "pubkey": "<hex or empty>", "set_at": 1730000000 },
+  "hosts": { "<hex>": { "on": true, "set_at": 1730000000 } }
 }
 ```
 
@@ -131,11 +132,19 @@ desktop or to a VPS.
 At call start, and again whenever the current transport fails:
 
 1. `server` if the group's `preferred_sfu` answers a ping within 3 s.
-2. Else `host_peer` if a listed host peer is online and opted in.
+2. Else `host_peer` if a listed host peer is online and opted in, newest
+   opt-in first.
 3. Else `mesh`.
 
-Any participant can switch the mode by hand at any time. The UI shows the
-current mode and a one-tap switch.
+All candidates are pinged at once, so a dead server costs one timeout. A
+call already running keeps the route its participants announce (`mode`
+and `sfu` ride on presence signals), so a late joiner picks the same host.
+If two participants still end up on different SFUs, or one on mesh, the
+call falls back to mesh.
+
+Any participant can switch the mode by hand at any time. A switch names the
+SFU the initiator reached, so everyone moves to the same one. The UI shows
+the current mode and a one-tap switch.
 
 ### Mid-call switch (make before break)
 

@@ -1,5 +1,6 @@
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import 'blank_track.dart';
 import 'call_crypto.dart';
 import 'call_signal.dart';
 
@@ -24,6 +25,9 @@ abstract interface class CallHost {
 abstract interface class CallTransport {
   /// `mesh`, `host_peer` or `server`.
   String get mode;
+
+  /// The SFU carrying the call (hex pubkey); null in mesh.
+  String? get sfu;
 
   Future<void> start();
 
@@ -68,6 +72,52 @@ class LinkStats {
 const defaultIceServers = [
   {'urls': 'stun:stun.l.google.com:19302'},
 ];
+
+/// Adds a video transceiver sending [track], or nothing yet, encrypted
+/// from the start. Chrome skips a sender transform attached after
+/// negotiation, so a camera or screen added later would leave in plaintext;
+/// dart_webrtc needs a track to attach one, so web borrows a blank track.
+/// The bool is false when the sender still needs [CallCrypto.encrypt].
+Future<(RTCRtpTransceiver, bool)> addEncryptedVideo(
+  RTCPeerConnection pc,
+  CallHost host, {
+  required RTCRtpTransceiverInit init,
+  MediaStreamTrack? track,
+}) async {
+  final blank = track == null ? await blankVideoTrack() : null;
+  final sending = track ?? blank;
+  final transceiver = sending == null
+      ? await pc.addTransceiver(
+          kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
+          init: init,
+        )
+      : await pc.addTransceiver(
+          track: sending,
+          kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
+          init: init,
+        );
+  if (sending != null) await host.crypto.encrypt(transceiver.sender, host.me);
+  if (blank != null) {
+    await transceiver.sender.replaceTrack(null);
+    await blank.stop();
+  }
+  return (transceiver, sending != null);
+}
+
+/// Replaces [sender]'s track and waits until it shows. On web the
+/// plugin drops the browser's promise, and a frame cryptor attached before
+/// the track lands throws.
+Future<void> replaceTrackSettled(
+  RTCRtpSender sender,
+  MediaStreamTrack? track,
+) async {
+  await sender.replaceTrack(track);
+  if (track == null) return;
+  final deadline = DateTime.now().add(const Duration(seconds: 2));
+  while (sender.track?.id != track.id && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+}
 
 /// Waits for ICE gathering so one offer or answer carries every candidate.
 Future<RTCSessionDescription?> gatheredDescription(RTCPeerConnection pc) async {

@@ -25,6 +25,9 @@ class MeshTransport implements CallTransport {
   String get mode => 'mesh';
 
   @override
+  String? get sfu => null;
+
+  @override
   Future<void> start() async {}
 
   @override
@@ -107,10 +110,12 @@ class MeshTransport implements CallTransport {
     }
     if (!_host.outgoingTracks.any((t) => t.kind == 'video')) {
       // Keeps a video slot so a later camera or screen needs no renegotiation.
-      await pc.addTransceiver(
-        kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
+      final (video, encrypted) = await addEncryptedVideo(
+        pc,
+        _host,
         init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv),
       );
+      if (encrypted) _encrypted.add(video.sender.senderId);
     }
     for (final transceiver in await pc.getTransceivers()) {
       await _host.crypto.decrypt(transceiver.receiver, participant);
@@ -163,7 +168,7 @@ class MeshTransport implements CallTransport {
         final sender = transceiver.sender;
         final kind = sender.track?.kind ?? transceiver.receiver.track?.kind;
         if (kind != 'video') continue;
-        await sender.replaceTrack(track);
+        await replaceTrackSettled(sender, track);
         if (track != null && _encrypted.add(sender.senderId)) {
           await _host.crypto.encrypt(sender, _host.me);
         }

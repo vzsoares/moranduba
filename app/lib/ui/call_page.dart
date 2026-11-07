@@ -35,7 +35,7 @@ Future<void> openCall(
     if (calls.serverProblem case final problem?) {
       messenger.showSnackBar(
         SnackBar(
-          content: Text('Call server unavailable, calling directly. $problem'),
+          content: Text('No call server answered, calling directly. $problem'),
         ),
       );
     }
@@ -103,7 +103,12 @@ class _CallPageState extends State<CallPage> {
                   actions: [
                     _ModeSwitch(
                       call: call,
-                      hasServer: session.serverOf(call.groupId) != null,
+                      modes: [
+                        'mesh',
+                        if (session.serverOf(call.groupId) != null) 'server',
+                        if (session.hostsOf(call.groupId).isNotEmpty)
+                          'host_peer',
+                      ],
                     ),
                     const SizedBox(width: 8),
                     IconButton(
@@ -163,31 +168,32 @@ class _CallPageState extends State<CallPage> {
   );
 }
 
-/// The mode badge; a menu to move the whole call to the other mode.
+/// The mode badge; a menu to move the whole call to another mode.
 class _ModeSwitch extends StatelessWidget {
-  const _ModeSwitch({required this.call, required this.hasServer});
+  const _ModeSwitch({required this.call, required this.modes});
 
   final GroupCall call;
-  final bool hasServer;
+
+  /// Modes this group can use.
+  final List<String> modes;
+
+  static const _labels = {
+    'mesh': 'Switch everyone to direct (mesh)',
+    'server': 'Switch everyone to the call server',
+    'host_peer': "Switch everyone to a member's computer",
+  };
 
   @override
   Widget build(BuildContext context) {
     final badge = _ModeBadge(mode: call.mode);
-    if (!call.canSwitch || call.switching) return badge;
-    final target = call.mode == 'mesh' ? 'server' : 'mesh';
-    if (target == 'server' && !hasServer) return badge;
+    final targets = modes.where((m) => m != call.mode).toList();
+    if (!call.canSwitch || call.switching || targets.isEmpty) return badge;
     return PopupMenuButton<String>(
       tooltip: 'How the call travels',
       onSelected: (mode) => unawaited(call.switchMode(mode)),
       itemBuilder: (_) => [
-        PopupMenuItem(
-          value: target,
-          child: Text(
-            target == 'server'
-                ? 'Switch everyone to the call server'
-                : 'Switch everyone to direct (mesh)',
-          ),
-        ),
+        for (final mode in targets)
+          PopupMenuItem(value: mode, child: Text(_labels[mode] ?? mode)),
       ],
       child: badge,
     );

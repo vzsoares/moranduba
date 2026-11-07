@@ -2,7 +2,8 @@
 // one page per participant: ?role=alice|bob&sk=<hex>&peer=<hex pubkey>,
 // plus &sfu=<hex pubkey>&code=<claim code> to call through a Moranduba SFU,
 // and &switch=1 to move the call to mesh and back mid-call, or &split=1 to
-// keep Bob off the server so the call has to fall back to mesh.
+// make the SFU unreachable for Bob so the call has to fall back to mesh. &hostpeer=1
+// lists the SFU as a host peer instead of the group's server.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
 import 'dart:math';
@@ -11,6 +12,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:moranduba/core/calls/group_call.dart';
+import 'package:moranduba/core/calls/sfu_client.dart';
 import 'package:moranduba/core/groups/group_engine.dart';
 import 'package:moranduba/core/groups/groups.dart';
 import 'package:moranduba/core/groups/mls_bridge.dart';
@@ -27,7 +29,9 @@ final _params = Uri.base.queryParameters;
 final _role = _params['role'] ?? 'alice';
 final _sfu = _params['sfu'];
 final _split = _params['split'] != null;
-final _mode = _sfu == null || (_split && _role == 'bob') ? 'mesh' : 'server';
+final _hostPeer = _params['hostpeer'] != null;
+final _sfuMode = _hostPeer ? 'host_peer' : 'server';
+final _mode = _sfu == null || (_split && _role == 'bob') ? 'mesh' : _sfuMode;
 
 void _log(String line) => debugPrint('E2E $_role $line');
 
@@ -136,7 +140,11 @@ Future<void> _alice() async {
   _log('group created');
   if (_sfu case final sfu?) {
     if (_params['code'] case final code?) await session.claimServer(sfu, code);
-    await session.setServer(group!.id, sfu);
+    if (_hostPeer) {
+      await session.setHost(group!.id, sfu, on: true);
+    } else {
+      await session.setServer(group!.id, sfu);
+    }
     await _serverReady(session);
     _log('server set');
   }
@@ -150,7 +158,7 @@ Future<void> _alice() async {
   }
 
   if (_params['switch'] != null) {
-    for (final mode in ['mesh', 'server']) {
+    for (final mode in ['mesh', _sfuMode]) {
       await call.switchMode(mode);
       if (call.mode != mode) {
         throw StateError('switch to $mode failed: ${call.switchProblem}');
@@ -193,9 +201,15 @@ Future<void> _bob() async {
   await groups.accept(groups.invites.single.id);
   final groupId = groups.spaces.single.id;
   if (_sfu case final sfu?) {
-    await _until('server choice', () => session.serverOf(groupId) == sfu);
+    await _until(
+      'server choice',
+      () => _hostPeer
+          ? session.hostsOf(groupId).contains(sfu)
+          : session.serverOf(groupId) == sfu,
+    );
     if (_split) {
-      session.calls!.serverFor = (_) => null;
+      session.calls!.ping = (_) =>
+          Future.error(const SfuException('unreachable in this test'));
     } else {
       await _serverReady(session);
     }

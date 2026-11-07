@@ -177,10 +177,8 @@ class Session extends ChangeNotifier {
       groups = started;
       calls = Calls(started, sfuClient: sfuClient)
         ..onCallEvent = _logCall
-        ..serverFor = (groupId) => switch (servers.of(groupId).pubkey) {
-          '' => null,
-          final pubkey => pubkey,
-        };
+        ..serverFor = serverOf
+        ..hostsFor = servers.hostsOf;
       started.signals.listen(_onGroupSignal);
       started.incoming.listen(_onGroupMessage);
       started.addListener(_shareProfileSoon);
@@ -310,12 +308,17 @@ class Session extends ChangeNotifier {
             if (changed && !_closed) notifyListeners();
           }),
         );
-      case {'t': 'sfu', 'sfu': final Object? json}:
+      case {'t': 'sfu', 'sfu': final Object? json} &&
+          final Map<String, Object?> body:
         final sfu = PreferredSfu.fromJson(json);
         if (sfu == null) return;
+        final hosts = hostPeersFromJson(body['hosts']);
         unawaited(
-          servers.put(signal.groupId, sfu).then((changed) async {
-            if (!changed) return;
+          Future.wait([
+            servers.put(signal.groupId, sfu),
+            servers.putHosts(signal.groupId, hosts),
+          ]).then((changed) async {
+            if (!changed.contains(true)) return;
             if (groups?.group(signal.groupId)?.epoch case final epoch?) {
               await servers.markAnnounced(signal.groupId, epoch);
             }
@@ -376,8 +379,17 @@ class Session extends ChangeNotifier {
     _syncAllowlistsSoon();
   }
 
-  /// Runs the call server on this desktop (host peer) and makes it
-  /// [groupId]'s server. [dataDir] keeps its key across restarts.
+  /// Opted-in host peers of [groupId] (hex pubkeys), newest first.
+  List<String> hostsOf(String groupId) => servers.hostsOf(groupId);
+
+  /// Whether this desktop hosts calls for [groupId] right now.
+  bool hostsCallsFor(String groupId) => switch (hosting) {
+    final sfu? => hostsOf(groupId).contains(sfu.identity.pubkey),
+    null => false,
+  };
+
+  /// Runs the call server on this desktop and offers it to [groupId] as a
+  /// host peer. [dataDir] keeps its key across restarts.
   Future<void> hostCalls(String groupId, {required String dataDir}) async {
     final sfu = hosting ??= await startHostedSfu(
       dataDir: dataDir,
@@ -387,7 +399,31 @@ class Session extends ChangeNotifier {
     if (identity.claimCode.isNotEmpty && !ownsServer(identity.pubkey)) {
       await claimServer(identity.pubkey, identity.claimCode);
     }
-    await setServer(groupId, identity.pubkey);
+    await setHost(groupId, identity.pubkey, on: true);
+  }
+
+  /// Withdraws this desktop's server from [groupId].
+  Future<void> unhostCalls(String groupId) async {
+    if (hosting case final sfu?) {
+      await setHost(groupId, sfu.identity.pubkey, on: false);
+    }
+  }
+
+  /// Opts the SFU [pubkey] in or out as a host peer of [groupId], for
+  /// everyone in it.
+  Future<void> setHost(
+    String groupId,
+    String pubkey, {
+    required bool on,
+  }) async {
+    final previous = servers.host(groupId, pubkey)?.setAt ?? 0;
+    final now = _now();
+    await servers.putHosts(groupId, {
+      pubkey: HostPeer(on: on, setAt: now > previous ? now : previous + 1),
+    });
+    notifyListeners();
+    await _announceServer(groupId, servers.of(groupId));
+    _syncAllowlistsSoon();
   }
 
   Future<void> stopHosting() async {
@@ -416,7 +452,11 @@ class Session extends ChangeNotifier {
     if (g == null) return;
     await g.sendSignal(
       groupId,
-      jsonEncode({'t': 'sfu', 'sfu': choice.toJson()}),
+      jsonEncode({
+        't': 'sfu',
+        'sfu': choice.toJson(),
+        'hosts': servers.hostsJson(groupId),
+      }),
     );
     if (g.group(groupId)?.epoch case final epoch?) {
       await servers.markAnnounced(groupId, epoch);
@@ -429,7 +469,8 @@ class Session extends ChangeNotifier {
     for (final space in g.spaces) {
       final choice = servers.of(space.id);
       final epoch = g.group(space.id)?.epoch;
-      if (choice.setAt == 0 || epoch == null) continue;
+      final none = choice.setAt == 0 && servers.hostsJson(space.id).isEmpty;
+      if (none || epoch == null) continue;
       if (servers.announcedOn(space.id, epoch)) continue;
       unawaited(
         servers

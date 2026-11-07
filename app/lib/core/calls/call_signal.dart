@@ -53,6 +53,7 @@ class CallSignal {
     this.sdp,
     this.media = const MediaState(),
     this.mode,
+    this.sfu,
     this.seq = 0,
   });
 
@@ -64,8 +65,11 @@ class CallSignal {
   final String? sdp;
   final MediaState media;
 
-  /// Transport for [SignalType.switchMode]: `mesh`, `host_peer`, `server`.
+  /// Transport in use, or switched to: `mesh`, `host_peer`, `server`.
   final String? mode;
+
+  /// The SFU (hex pubkey) behind [mode], outside mesh.
+  final String? sfu;
   final int seq;
 
   String encode() => jsonEncode({
@@ -75,6 +79,7 @@ class CallSignal {
     'sdp': ?sdp,
     'media': media.toJson(),
     'mode': ?mode,
+    'sfu': ?sfu,
     if (seq != 0) 'seq': seq,
   });
 
@@ -102,6 +107,10 @@ class CallSignal {
         media: MediaState.fromJson(json['media']),
         mode: switch (json['mode']) {
           final String mode => mode,
+          _ => null,
+        },
+        sfu: switch (json['sfu']) {
+          final String sfu => sfu,
           _ => null,
         },
         seq: switch (json['seq']) {
