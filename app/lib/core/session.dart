@@ -1,21 +1,31 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
 import 'calls/calls.dart';
 import 'friend_list.dart';
+import 'friend_protocol.dart';
 import 'groups/blossom.dart';
 import 'groups/group_engine.dart';
 import 'groups/groups.dart';
-import 'friend_protocol.dart';
+import 'groups/mls_bridge.dart';
+import 'groups/mls_platform.dart';
 import 'identity.dart';
+import 'profiles.dart';
 import 'relays.dart';
 
 /// One logged-in identity: relay connection, DM inbox, friendships and
 /// groups.
 class Session extends ChangeNotifier {
-  Session._(this.identity, this._ndk, this._friendList, this.relays);
+  Session._(
+    this.identity,
+    this._ndk,
+    this._friendList,
+    this.relays,
+    this.profiles,
+  );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
   /// [groupsError].
@@ -24,7 +34,9 @@ class Session extends ChangeNotifier {
     List<String>? relays,
     Future<GroupEngine> Function()? openGroupEngine,
     BlossomClient? blossom,
+    SnapshotStore? profileStore,
   }) async {
+    final files = blossom ?? BlossomClient();
     final relayList = relays ?? defaultRelays;
     final ndk = Ndk(
       NdkConfig(
@@ -37,21 +49,30 @@ class Session extends ChangeNotifier {
       pubkey: identity.publicKey,
       privkey: identity.privateKey,
     );
+    final book = ProfileBook(
+      profileStore ?? await openSnapshotStore('${identity.publicKey}-profiles'),
+      files,
+    );
+    await book.load();
     final session = Session._(
       identity,
       ndk,
       FriendList(ndk, relays: relayList),
       relayList,
+      book,
     );
     await session._init();
     if (openGroupEngine != null) {
-      await session._startGroups(openGroupEngine, blossom);
+      await session._startGroups(openGroupEngine, files);
     }
+    session._shareProfileSoon();
     return session;
   }
 
   final Identity identity;
   final List<String> relays;
+  final ProfileBook profiles;
+  Timer? _profileTimer;
   Groups? groups;
   Calls? calls;
   Object? groupsError;
@@ -100,6 +121,8 @@ class Session extends ChangeNotifier {
       await started.start();
       groups = started;
       calls = Calls(started);
+      started.signals.listen(_onGroupSignal);
+      started.addListener(_shareProfileSoon);
       // Welcomes that arrived before groups were up.
       for (final wrapped in _unhandledWraps) {
         await started.onGiftWrap(wrapped);
@@ -123,6 +146,12 @@ class Session extends ChangeNotifier {
       return;
     }
     if (!_seen.add(message.id)) return;
+    if (Control.of(message.rumor) == Control.profile && !message.isOutgoing) {
+      final profile = Profile.decode(message.content);
+      if (profile != null && await profiles.put(message.peerPubKey, profile)) {
+        notifyListeners();
+      }
+    }
     final thread = _messages.putIfAbsent(message.peerPubKey, () => []);
     thread
       ..add(message)
@@ -130,13 +159,89 @@ class Session extends ChangeNotifier {
     if (stateOf(message.peerPubKey) == FriendState.friend &&
         _storedFriends.add(message.peerPubKey)) {
       _scheduleSave();
+      _shareProfileSoon();
     }
     notifyListeners();
   }
 
-  /// How to show [pubkey] in the UI.
-  String displayName(String pubkey) =>
-      pubkey == identity.publicKey ? 'You' : shortKey(pubkey);
+  Profile? get myProfile => profiles.of(identity.publicKey);
+
+  /// How to show [pubkey] in the UI: their profile name, else a short npub.
+  String displayName(String pubkey) {
+    final name = profiles.of(pubkey)?.name ?? '';
+    if (name.isNotEmpty) return name;
+    return pubkey == identity.publicKey ? 'You' : shortKey(pubkey);
+  }
+
+  Future<Uint8List?> picture(String pubkey) => profiles.picture(pubkey);
+
+  /// Saves our profile and sends it to every friend and group.
+  Future<void> updateProfile({
+    required String name,
+    Uint8List? picture,
+    String? mime,
+    bool removePicture = false,
+  }) async {
+    await profiles.edit(
+      identity.publicKey,
+      name: name,
+      picture: picture,
+      mime: mime,
+      removePicture: removePicture,
+    );
+    notifyListeners();
+    await _shareProfile();
+  }
+
+  void _onGroupSignal(GroupSignal signal) {
+    if (jsonDecode(signal.payload) case {
+      't': 'profile',
+      'profile': final Object? json,
+    }) {
+      final profile = Profile.fromJson(json);
+      if (profile == null) return;
+      unawaited(
+        profiles.put(signal.sender, profile).then((changed) {
+          if (changed && !_closed) notifyListeners();
+        }),
+      );
+    }
+  }
+
+  /// Batches profile sends while friends and groups load.
+  void _shareProfileSoon() {
+    _profileTimer?.cancel();
+    _profileTimer = Timer(const Duration(seconds: 2), () {
+      unawaited(
+        _shareProfile().catchError((Object e) {
+          debugPrint('share profile: $e');
+        }),
+      );
+    });
+  }
+
+  Future<void> _shareProfile() async {
+    final mine = myProfile;
+    if (mine == null || _closed) return;
+    for (final friend in friends) {
+      if (!profiles.needsSending(friend, mine)) continue;
+      await _send(friend, mine.encode(), Control.profile.tags);
+      await profiles.markSent(friend, mine);
+    }
+    final g = groups;
+    if (g == null) return;
+    for (final space in g.spaces) {
+      // Keyed by epoch so members who joined since get it too.
+      final epoch = g.group(space.id)?.epoch ?? 0;
+      final target = 'group:${space.id}@$epoch';
+      if (!profiles.needsSending(target, mine)) continue;
+      await g.sendSignal(
+        space.id,
+        jsonEncode({'t': 'profile', 'profile': mine.toJson()}),
+      );
+      await profiles.markSent(target, mine, replacing: 'group:${space.id}@');
+    }
+  }
 
   FriendState stateOf(String pubkey) => friendStateFrom(
     storedFriend: _storedFriends.contains(pubkey),
@@ -167,15 +272,19 @@ class Session extends ChangeNotifier {
       if (Control.of(m.rumor) == null) m,
   ];
 
-  Future<void> requestFriend(String pubkey, {String note = ''}) {
+  /// Our profile goes along, so they see who is asking.
+  Future<void> requestFriend(String pubkey, {String note = ''}) async {
     if (pubkey == identity.publicKey) {
       throw ArgumentError.value(pubkey, 'pubkey', 'Cannot befriend yourself');
     }
-    return _send(
+    await _send(
       pubkey,
       note.isEmpty ? 'Wants to be your friend on Moranduba' : note,
       Control.friendRequest.tags,
     );
+    if (myProfile case final mine?) {
+      await _send(pubkey, mine.encode(), Control.profile.tags);
+    }
   }
 
   Future<void> acceptFriend(String pubkey) async {
@@ -185,6 +294,7 @@ class Session extends ChangeNotifier {
       Control.friendAccept.tags,
     );
     if (_storedFriends.add(pubkey)) _scheduleSave();
+    _shareProfileSoon();
     notifyListeners();
   }
 
@@ -221,6 +331,7 @@ class Session extends ChangeNotifier {
 
   /// Closes the session and deletes this identity's group state.
   Future<void> wipe() async {
+    await profiles.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
@@ -229,6 +340,7 @@ class Session extends ChangeNotifier {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _profileTimer?.cancel();
     await calls?.close();
     await groups?.close();
     if (_saveTimer?.isActive ?? false) {

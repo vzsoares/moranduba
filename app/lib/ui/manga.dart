@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -444,6 +445,7 @@ class LabeledField extends StatelessWidget {
     this.obscure = false,
     this.autofocus = false,
     this.monospace = false,
+    this.maxLength,
     this.onSubmitted,
   });
 
@@ -454,6 +456,7 @@ class LabeledField extends StatelessWidget {
   final bool obscure;
   final bool autofocus;
   final bool monospace;
+  final int? maxLength;
   final ValueChanged<String>? onSubmitted;
 
   @override
@@ -468,7 +471,12 @@ class LabeledField extends StatelessWidget {
         obscureText: obscure,
         autofocus: autofocus,
         style: monospace ? monoStyle : null,
-        decoration: InputDecoration(hintText: hint, errorText: error),
+        maxLength: maxLength,
+        decoration: InputDecoration(
+          hintText: hint,
+          errorText: error,
+          counterText: '',
+        ),
         onSubmitted: onSubmitted,
       ),
     ],
@@ -482,6 +490,7 @@ class RowPanel extends StatelessWidget {
     required this.title,
     required this.line,
     this.icon = Icons.person_outline,
+    this.leading,
     this.trailing,
     this.onTap,
   });
@@ -489,6 +498,9 @@ class RowPanel extends StatelessWidget {
   final Widget title;
   final String line;
   final IconData icon;
+
+  /// Replaces the [icon] avatar.
+  final Widget? leading;
   final Widget? trailing;
   final VoidCallback? onTap;
 
@@ -505,7 +517,7 @@ class RowPanel extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                Avatar(icon: icon),
+                leading ?? Avatar(icon: icon),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -532,28 +544,45 @@ class RowPanel extends StatelessWidget {
   }
 }
 
-/// Round avatar placeholder: ink ring over screentone.
+/// Round avatar: ink ring around a picture, or an icon over screentone.
 class Avatar extends StatelessWidget {
-  const Avatar({super.key, this.icon = Icons.person_outline});
+  const Avatar({
+    super.key,
+    this.icon = Icons.person_outline,
+    this.picture,
+    this.size = 44,
+  });
 
   final IconData icon;
+  final Uint8List? picture;
+  final double size;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: 44,
-    height: 44,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      border: Border.all(width: MangaShape.stroke),
-    ),
-    child: ClipOval(
-      child: Screentone(
-        spacing: 5,
-        dot: 1,
-        child: Center(child: Icon(icon, size: 22)),
+  Widget build(BuildContext context) {
+    final picture = this.picture;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(width: MangaShape.stroke),
       ),
-    ),
-  );
+      child: ClipOval(
+        child: picture == null
+            ? Screentone(
+                spacing: 5,
+                dot: 1,
+                child: Center(child: Icon(icon, size: size / 2)),
+              )
+            : Image.memory(
+                picture,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => Icon(icon, size: size / 2),
+              ),
+      ),
+    );
+  }
 }
 
 /// Brand mark: a listener-speaker in profile, inked in [color].

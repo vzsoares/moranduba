@@ -42,6 +42,7 @@ Future<Session> _start(
   identity,
   relays: _relays,
   blossom: blossom,
+  profileStore: MemorySnapshotStore(),
   openGroupEngine: () => RustGroupEngine.open(
     bridge: const NativeMlsBridge(),
     secretKey: identity.privateKey,
@@ -167,6 +168,29 @@ void main() {
     expect(message.text, 'look');
     final picture = await bobGroups.media(group.id, message.media.single);
     expect(picture.sublist(0, 8), png.sublist(0, 8));
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('group members see names of people they never befriended', () async {
+    final ids = [Identity.generate(), Identity.generate(), Identity.generate()];
+    final [alice, bob, carol] = [
+      for (final id in ids) await _start(id, MemorySnapshotStore()),
+    ];
+    for (final s in [alice, bob, carol]) {
+      addTearDown(s.close);
+    }
+    await alice.updateProfile(name: 'Alice');
+    final group = await alice.groups!.create('crew', [ids[1].publicKey]);
+    final bobGroups = bob.groups!;
+    await _until(bobGroups, () => bobGroups.invites.isNotEmpty);
+    await bobGroups.accept(bobGroups.invites.single.id);
+    await _until(bob, () => bob.displayName(ids[0].publicKey) == 'Alice');
+
+    // Carol joins later, on a new epoch, and still gets it.
+    await alice.groups!.addMembers(group.id, [ids[2].publicKey]);
+    final carolGroups = carol.groups!;
+    await _until(carolGroups, () => carolGroups.invites.isNotEmpty);
+    await carolGroups.accept(carolGroups.invites.single.id);
+    await _until(carol, () => carol.displayName(ids[0].publicKey) == 'Alice');
   }, timeout: const Timeout(Duration(seconds: 90)));
 
   test('creating a group with someone who has no key package fails', () async {

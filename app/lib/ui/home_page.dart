@@ -8,6 +8,8 @@ import '../core/session.dart';
 import 'chat_page.dart';
 import 'groups_page.dart';
 import 'manga.dart';
+import 'people.dart';
+import 'profile_editor.dart';
 import 'theme.dart';
 
 class HomePage extends StatefulWidget {
@@ -48,10 +50,19 @@ class _HomePageState extends State<HomePage>
               children: [Logo(), SizedBox(width: 10), Text('MORANDUBA')],
             ),
             actions: [
-              IconButton(
-                tooltip: 'My key',
-                icon: const Icon(Icons.key_outlined),
-                onPressed: () => _showIdentity(context),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Tooltip(
+                  message: 'Profile and key',
+                  child: InkResponse(
+                    onTap: () => _showIdentity(context),
+                    child: PersonAvatar(
+                      session: session,
+                      pubkey: session.identity.publicKey,
+                      size: 36,
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(width: 8),
             ],
@@ -169,24 +180,29 @@ class _Badge extends StatelessWidget {
 
 class _PersonPanel extends StatelessWidget {
   const _PersonPanel({
+    required this.session,
     required this.pubkey,
     required this.line,
-    this.icon = Icons.person_outline,
+    this.icon,
     this.trailing,
     this.onTap,
   });
 
+  final Session session;
   final String pubkey;
   final String line;
-  final IconData icon;
+  final IconData? icon;
   final Widget? trailing;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => RowPanel(
-    title: Text(shortKey(pubkey), style: monoStyle),
+    title: PersonName(session: session, pubkey: pubkey),
     line: line,
-    icon: icon,
+    leading: icon == null
+        ? PersonAvatar(session: session, pubkey: pubkey)
+        : null,
+    icon: icon ?? Icons.person_outline,
     trailing: trailing,
     onTap: onTap,
   );
@@ -205,7 +221,7 @@ class _FriendsTab extends StatelessWidget {
       return EmptyState(
         icon: Icons.groups_outlined,
         title: 'NOBODY HERE YET',
-        message: 'Share your npub from the key button, or add a friend’s.',
+        message: 'Share your npub from your profile button, or add a friend’s.',
         action: FilledButton(onPressed: onAdd, child: const Text('Add friend')),
       );
     }
@@ -219,6 +235,7 @@ class _FriendsTab extends StatelessWidget {
         return Entrance(
           index: i,
           child: _PersonPanel(
+            session: session,
             pubkey: pubkey,
             line: chat.isEmpty ? 'Say hi' : chat.last.content,
             trailing: const Icon(Icons.chevron_right),
@@ -259,12 +276,13 @@ class _RequestsTab extends StatelessWidget {
           icon: Icons.group_add_outlined,
           title: Text(invite.groupName, style: text.titleMedium),
           line:
-              'Group invite from ${shortKey(invite.inviter)} · '
+              'Group invite from ${session.displayName(invite.inviter)} · '
               '${members(invite.memberCount)}',
           trailing: _InviteActions(groups: groups!, invite: invite),
         ),
       for (final pubkey in incoming)
         _PersonPanel(
+          session: session,
           pubkey: pubkey,
           line: 'Wants to be your friend',
           trailing: Wrap(
@@ -283,6 +301,7 @@ class _RequestsTab extends StatelessWidget {
         ),
       for (final pubkey in outgoing)
         _PersonPanel(
+          session: session,
           pubkey: pubkey,
           icon: Icons.schedule,
           line: 'Request sent, waiting for them',
@@ -444,6 +463,10 @@ class _IdentitySheetState extends State<_IdentitySheet> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Text('YOUR PROFILE', style: text.headlineSmall),
+                const SizedBox(height: 12),
+                ProfileEditor(session: widget.session),
+                const SizedBox(height: 20),
                 Text('YOUR KEY', style: text.headlineSmall),
                 const SizedBox(height: 12),
                 Panel(

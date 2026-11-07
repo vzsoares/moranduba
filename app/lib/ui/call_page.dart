@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../core/calls/group_call.dart';
 import '../core/session.dart';
 import 'manga.dart';
+import 'people.dart';
 import 'theme.dart';
 
 bool get _desktop =>
@@ -132,6 +133,11 @@ class _Tiles extends StatelessWidget {
     final tiles = <Widget>[
       _Tile(
         label: 'You',
+        avatar: PersonAvatar(
+          session: session,
+          pubkey: session.identity.publicKey,
+          size: 96,
+        ),
         renderer: call.localRenderer,
         showVideo: call.cameraOn || call.sharing,
         muted: !call.micOn,
@@ -141,6 +147,7 @@ class _Tiles extends StatelessWidget {
       for (final p in others)
         _Tile(
           label: session.displayName(p.pubkey),
+          avatar: PersonAvatar(session: session, pubkey: p.pubkey, size: 96),
           renderer: p.renderer,
           showVideo: p.media.video || p.media.screen,
           muted: !p.media.audio,
@@ -193,6 +200,7 @@ class _Waiting extends StatelessWidget {
 class _Tile extends StatelessWidget {
   const _Tile({
     required this.label,
+    required this.avatar,
     required this.renderer,
     required this.showVideo,
     required this.muted,
@@ -201,6 +209,7 @@ class _Tile extends StatelessWidget {
   });
 
   final String label;
+  final Widget avatar;
   final RTCVideoRenderer? renderer;
   final bool showVideo;
   final bool muted;
@@ -234,10 +243,16 @@ class _Tile extends StatelessWidget {
                 ),
               ),
             if (!showVideo)
-              const Screentone(
-                color: Color(0xFF444444),
+              Screentone(
+                color: const Color(0xFF444444),
                 child: Center(
-                  child: Icon(Icons.person, size: 56, color: MangaColors.tone),
+                  child: DecoratedBox(
+                    decoration: const BoxDecoration(
+                      color: MangaColors.paper,
+                      shape: BoxShape.circle,
+                    ),
+                    child: avatar,
+                  ),
                 ),
               ),
             Positioned(

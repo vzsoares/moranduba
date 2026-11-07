@@ -15,6 +15,7 @@ import 'chat_page.dart';
 import 'composer.dart';
 import 'manga.dart';
 import 'media_viewer.dart';
+import 'people.dart';
 import 'theme.dart';
 
 class GroupsTab extends StatelessWidget {
@@ -77,7 +78,7 @@ class GroupsTab extends StatelessWidget {
 String members(int count) => count == 1 ? '1 member' : '$count members';
 
 String _speaker(Session session, String pubkey) =>
-    pubkey == session.identity.publicKey ? 'You' : shortKey(pubkey);
+    pubkey == session.identity.publicKey ? 'You' : session.displayName(pubkey);
 
 void openGroup(BuildContext context, Session session, String groupId) =>
     Navigator.of(context).push(
@@ -153,6 +154,7 @@ class _NewGroupDialogState extends State<NewGroupDialog> {
               Text('Friends', style: Theme.of(context).textTheme.labelLarge),
               const SizedBox(height: 6),
               FriendPicker(
+                session: widget.session,
                 friends: friends,
                 picked: _picked,
                 onChanged: () => setState(() {}),
@@ -186,11 +188,13 @@ String _missingMessage(MissingKeyPackage e) =>
 class FriendPicker extends StatelessWidget {
   const FriendPicker({
     super.key,
+    required this.session,
     required this.friends,
     required this.picked,
     required this.onChanged,
   });
 
+  final Session session;
   final List<String> friends;
   final Set<String> picked;
   final VoidCallback onChanged;
@@ -209,7 +213,12 @@ class FriendPicker extends StatelessWidget {
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
               value: picked.contains(pubkey),
-              title: Text(shortKey(pubkey), style: monoStyle),
+              secondary: PersonAvatar(
+                session: session,
+                pubkey: pubkey,
+                size: 32,
+              ),
+              title: PersonName(session: session, pubkey: pubkey),
               onChanged: (on) {
                 if (on ?? false) {
                   picked.add(pubkey);
@@ -443,7 +452,9 @@ class _Messages extends StatelessWidget {
         return MessageRow(
           text: m.text,
           outgoing: outgoing,
-          speaker: outgoing || followsSame ? null : shortKey(m.sender),
+          speaker: outgoing || followsSame
+              ? null
+              : session.displayName(m.sender),
           attachments: [
             for (final media in m.media)
               if (media.isImage)
@@ -651,7 +662,14 @@ class _MembersSheetState extends State<_MembersSheet> {
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: RowPanel(
-                            title: Text(shortKey(pubkey), style: monoStyle),
+                            leading: PersonAvatar(
+                              session: widget.session,
+                              pubkey: pubkey,
+                            ),
+                            title: PersonName(
+                              session: widget.session,
+                              pubkey: pubkey,
+                            ),
                             line: [
                               if (pubkey == me) 'You',
                               if (widget.info.admins.contains(pubkey)) 'Admin',
@@ -725,6 +743,7 @@ class _AddMembersDialogState extends State<_AddMembersDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             FriendPicker(
+              session: widget.session,
               friends: widget.candidates,
               picked: _picked,
               onChanged: () => setState(() {}),

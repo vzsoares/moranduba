@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../core/identity.dart';
 import '../core/session.dart';
 import 'composer.dart';
 import 'manga.dart';
+import 'people.dart';
 import 'theme.dart';
 
 class ChatPage extends StatelessWidget {
@@ -17,12 +17,17 @@ class ChatPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: Row(
-          children: [
-            const Avatar(),
-            const SizedBox(width: 12),
-            Text(shortKey(peer), style: monoStyle),
-          ],
+        title: ListenableBuilder(
+          listenable: session,
+          builder: (context, _) => Row(
+            children: [
+              PersonAvatar(session: session, pubkey: peer),
+              const SizedBox(width: 12),
+              Flexible(
+                child: PersonName(session: session, pubkey: peer),
+              ),
+            ],
+          ),
         ),
       ),
       body: Column(

@@ -3,7 +3,10 @@ import 'package:ndk/ndk.dart';
 /// Control messages ride inside NIP-17 rumors as a `["moranduba", <type>]` tag.
 enum Control {
   friendRequest('friend_request'),
-  friendAccept('friend_accept');
+  friendAccept('friend_accept'),
+
+  /// Content is the sender's profile JSON.
+  profile('profile');
 
   const Control(this.wire);
 
@@ -47,6 +50,8 @@ FriendState friendStateFrom({
         } else {
           requestedByThem = true;
         }
+      case Control.profile:
+        break;
     }
   }
   if (requestedByMe && requestedByThem) return FriendState.friend;
