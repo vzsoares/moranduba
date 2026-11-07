@@ -481,7 +481,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                 ProfileEditor(session: widget.session),
                 if (notificationsSupported) ...[
                   const SizedBox(height: 12),
-                  const _NotificationsSwitch(),
+                  _NotificationsSwitch(session: widget.session),
                 ],
                 const SizedBox(height: 20),
                 Text('YOUR KEY', style: text.headlineSmall),
@@ -582,7 +582,9 @@ class _IdentitySheetState extends State<_IdentitySheet> {
 }
 
 class _NotificationsSwitch extends StatefulWidget {
-  const _NotificationsSwitch();
+  const _NotificationsSwitch({required this.session});
+
+  final Session session;
 
   @override
   State<_NotificationsSwitch> createState() => _NotificationsSwitchState();
@@ -595,7 +597,7 @@ class _NotificationsSwitchState extends State<_NotificationsSwitch> {
   Widget build(BuildContext context) => Panel(
     padding: EdgeInsets.zero,
     child: SwitchListTile(
-      title: const Text('Notify me about new messages'),
+      title: const Text('Notify me about messages and calls'),
       subtitle: Text(
         kIsWeb
             ? _on
@@ -610,6 +612,7 @@ class _NotificationsSwitchState extends State<_NotificationsSwitch> {
           : (on) async {
               if (on) {
                 on = await askForNotifications();
+                if (on) widget.session.enablePush();
               } else {
                 await turnOffNotifications();
               }

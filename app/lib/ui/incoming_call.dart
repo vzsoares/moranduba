@@ -62,6 +62,7 @@ class _IncomingCallLayerState extends State<IncomingCallLayer> {
     _calls?.removeListener(_sync);
     _calls = calls;
     calls?.addListener(_sync);
+    if (notificationsAllowed) _session?.enablePush();
     _sync();
   }
 

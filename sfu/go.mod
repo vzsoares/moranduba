@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	fiatjaf.com/nostr v0.0.0-20261101164043-96f89895a4b2
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/mailru/easyjson v0.9.0
 	github.com/pion/interceptor v0.1.51
 	github.com/pion/rtcp v1.2.20
@@ -21,6 +22,7 @@ require (
 	github.com/coder/websocket v1.8.13 // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect

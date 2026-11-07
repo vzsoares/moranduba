@@ -4,6 +4,17 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// UnifiedPush pulls tink, another plugin tink-android; one copy must win.
+configurations.all {
+    val tink = "com.google.crypto.tink:tink-android:1.23.0"
+    resolutionStrategy {
+        force(tink)
+        dependencySubstitution {
+            substitute(module("com.google.crypto.tink:tink")).using(module(tink))
+        }
+    }
+}
+
 android {
     namespace = "io.github.vzsoares.moranduba"
     // flutter_local_notifications and androidx.core need 37; Flutter defaults to 36.

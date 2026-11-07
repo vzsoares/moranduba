@@ -3,7 +3,8 @@
 // plus &sfu=<hex pubkey>&code=<claim code> to call through a Moranduba SFU,
 // and &switch=1 to move the call to mesh and back mid-call, or &split=1 to
 // make the SFU unreachable for Bob so the call has to fall back to mesh. &hostpeer=1
-// lists the SFU as a host peer instead of the group's server.
+// lists the SFU as a host peer instead of the group's server. &push=1 turns
+// on push, so the SFU log shows push_subscribe and ring requests.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
 import 'dart:math';
@@ -66,9 +67,9 @@ Future<void> main() async {
   }
 }
 
-Future<Session> _session() {
+Future<Session> _session() async {
   final id = Identity.fromPrivateKey(_params['sk']!);
-  return Session.start(
+  final session = await Session.start(
     id,
     relays: _relays,
     openGroupEngine: () => RustGroupEngine.open(
@@ -78,6 +79,8 @@ Future<Session> _session() {
       store: MemorySnapshotStore(),
     ),
   );
+  if (_params['push'] != null) session.enablePush();
+  return session;
 }
 
 /// The real call page; Chrome decodes remote video only while it renders.

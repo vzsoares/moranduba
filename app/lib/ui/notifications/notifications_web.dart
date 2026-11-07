@@ -31,3 +31,6 @@ void show(String title, String body, {required String tag}) {
     ),
   );
 }
+
+/// web/push_sw.js closes its own ring notifications.
+void cancel(String tag) {}

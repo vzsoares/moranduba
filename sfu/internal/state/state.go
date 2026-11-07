@@ -54,7 +54,7 @@ func LoadKey(dir string) (nostr.SecretKey, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		sk := nostr.Generate()
-		if err := writeAtomic(path, []byte(nip19.EncodeNsec(sk)+"\n"), 0o600); err != nil {
+		if err := WriteAtomic(path, []byte(nip19.EncodeNsec(sk)+"\n"), 0o600); err != nil {
 			return sk, err
 		}
 		return sk, nil
@@ -232,10 +232,11 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.path, append(raw, '\n'), 0o600)
+	return WriteAtomic(s.path, append(raw, '\n'), 0o600)
 }
 
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
+// WriteAtomic replaces path with data through a synced temp file.
+func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ import 'calls/calls.dart';
 import 'calls/host_peer.dart';
 import 'calls/sfu_book.dart';
 import 'calls/sfu_client.dart';
+import 'push/push.dart';
 import 'emojis.dart';
 import 'expiry.dart';
 import 'friend_list.dart';
@@ -122,6 +123,13 @@ class Session extends ChangeNotifier {
   /// Allowlists last sent to the servers we own.
   final Map<String, Set<String>> _allowSent = {};
   Timer? _allowTimer;
+
+  /// Push stays off until notifications are; then each SFU that our groups
+  /// use learns where to ring this device.
+  bool _push = false;
+  final Set<String> _pushReady = {};
+  final Set<String> _pushTrying = {};
+  Timer? _pushTimer;
   Timer? _profileTimer;
   Timer? _pruneTimer;
   final _notices = StreamController<Notice>.broadcast();
@@ -176,7 +184,10 @@ class Session extends ChangeNotifier {
       await started.start();
       groups = started;
       calls = Calls(started, sfuClient: sfuClient)
-        ..onCallEvent = _logCall
+        ..onCallEvent = (groupId, event) {
+          _logCall(groupId, event);
+          _pushRing(groupId, event);
+        }
         ..serverFor = serverOf
         ..hostsFor = servers.hostsOf;
       started.signals.listen(_onGroupSignal);
@@ -187,6 +198,7 @@ class Session extends ChangeNotifier {
       started.addListener(_announceEmojisSoon);
       started.addListener(_announceServersSoon);
       started.addListener(_syncAllowlistsSoon);
+      started.addListener(_syncPushSoon);
       // Welcomes that arrived before groups were up.
       for (final wrapped in _unhandledWraps) {
         await started.onGiftWrap(wrapped);
@@ -323,6 +335,7 @@ class Session extends ChangeNotifier {
               await servers.markAnnounced(signal.groupId, epoch);
             }
             _syncAllowlistsSoon();
+            _syncPushSoon();
             if (!_closed) notifyListeners();
           }),
         );
@@ -424,6 +437,7 @@ class Session extends ChangeNotifier {
     notifyListeners();
     await _announceServer(groupId, servers.of(groupId));
     _syncAllowlistsSoon();
+    _syncPushSoon();
   }
 
   Future<void> stopHosting() async {
@@ -445,6 +459,7 @@ class Session extends ChangeNotifier {
     notifyListeners();
     await _announceServer(groupId, choice);
     _syncAllowlistsSoon();
+    _syncPushSoon();
   }
 
   Future<void> _announceServer(String groupId, PreferredSfu choice) async {
@@ -615,6 +630,84 @@ class Session extends ChangeNotifier {
             .catchError((Object e) => debugPrint('announce emojis: $e')),
       );
     }
+  }
+
+  /// Lets the SFUs of our groups ring this device while the app is closed.
+  void enablePush() {
+    if (_push || !pushSupported) return;
+    _push = true;
+    _syncPushSoon();
+  }
+
+  /// Every SFU a group of ours uses: its server and its host peers.
+  Set<String> _sfusOf(String groupId) => {
+    ?serverOf(groupId),
+    ...hostsOf(groupId),
+  };
+
+  void _syncPushSoon({Duration after = const Duration(seconds: 3)}) {
+    if (!_push || _closed) return;
+    _pushTimer?.cancel();
+    _pushTimer = Timer(after, () {
+      unawaited(_syncPush().catchError((Object e) => debugPrint('push: $e')));
+    });
+  }
+
+  Future<void> _syncPush() async {
+    final g = groups;
+    if (g == null || _closed) return;
+    final sfus = {for (final space in g.spaces) ..._sfusOf(space.id)}
+      ..removeAll(_pushReady)
+      ..removeAll(_pushTrying);
+    _pushTrying.addAll(sfus);
+    await Future.wait([
+      for (final sfu in sfus)
+        _subscribePush(sfu)
+            .catchError((Object e) => debugPrint('push via $sfu: $e'))
+            .whenComplete(() => _pushTrying.remove(sfu)),
+    ]);
+  }
+
+  Future<void> _subscribePush(String sfu) async {
+    final pong = await pingServer(sfu);
+    // The owner's allowlist update may still be on its way.
+    if (pong['allowed'] != true) {
+      _syncPushSoon(after: const Duration(seconds: 10));
+      return;
+    }
+    final key = pong['push_key'];
+    if (key is! String) return;
+    final target = await pushSubscribe(sfu, key);
+    if (target == null) return;
+    await sfuClient.request(sfu, target.toRequest());
+    _pushReady.add(sfu);
+  }
+
+  /// Asks the group's SFUs to ring the other members' devices when we start
+  /// a call, and to stop when it ends.
+  void _pushRing(String groupId, CallEvent event) {
+    final g = groups;
+    final sfus = _sfusOf(groupId);
+    if (g == null || _closed || sfus.isEmpty) return;
+    unawaited(
+      g
+          .members(groupId)
+          .then((members) async {
+            final others = members.where((m) => m != identity.publicKey);
+            await Future.wait([
+              for (final sfu in sfus)
+                sfuClient
+                    .request(sfu, {
+                      'type': 'ring',
+                      'pubkeys': [...others],
+                      'call': event.callId,
+                      if (event.ended) 'stop': true,
+                    })
+                    .then<void>((_) {}, onError: (Object _) {}),
+            ]);
+          })
+          .catchError((Object e) => debugPrint('push ring: $e')),
+    );
   }
 
   /// Whether [groupId] records calls in its chat.
@@ -1038,6 +1131,7 @@ class Session extends ChangeNotifier {
     _profileTimer?.cancel();
     _pruneTimer?.cancel();
     _allowTimer?.cancel();
+    _pushTimer?.cancel();
     await _notices.close();
     await calls?.close();
     await sfuClient.close();

@@ -27,7 +27,7 @@ writable by it.
 | Variable | Default | Meaning |
 |---|---|---|
 | `RELAYS` | `ws://localhost:7777` | Comma-separated relay URLs. Reconnects with backoff. |
-| `DATA_DIR` | `/data` | Holds `key` (nsec) and `state.json` (owner, allowlist, unused claim code). |
+| `DATA_DIR` | `/data` | Holds `key` (nsec), `state.json` (owner, allowlist, unused claim code) and `push.json` (VAPID key, members' push subscriptions). |
 | `PUBLIC_IP` | auto-detected LAN IPv4 | Public IPv4 for ICE host candidates (added next to the local one) and the TURN relay address. |
 | `TURN_PORT` | `3478` | Embedded TURN/STUN server, UDP. `0` picks a free port (desktop sidecar). |
 | `UDP_PORT_MIN` / `UDP_PORT_MAX` | `50000` / `50200` | Port range shared by ICE and TURN relay allocations. |

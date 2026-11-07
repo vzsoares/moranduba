@@ -135,3 +135,8 @@ void show(String title, String body, {required String tag}) {
       )
       .ignore();
 }
+
+void cancel(String tag) {
+  if (!_ready) return;
+  _plugin.cancel(id: tag.hashCode & 0x7fffffff).ignore();
+}

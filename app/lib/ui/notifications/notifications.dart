@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../../core/push/push.dart';
 import '../../core/session.dart';
 import 'notifications_native.dart'
     if (dart.library.js_interop) 'notifications_web.dart'
@@ -36,3 +37,15 @@ void notifyRing(String title, String body, {required String tag}) {
     platform.show(title, body, tag: tag);
   }
 }
+
+/// Shows a ring pushed while the app is closed or in the background; the
+/// open app rings by itself.
+void showPushRing(PushRing ring) {
+  if (ring.stop) {
+    platform.cancel(_pushTag);
+  } else if (platform.allowed && platform.inBackground) {
+    platform.show('Incoming call', 'Open Moranduba to answer.', tag: _pushTag);
+  }
+}
+
+const _pushTag = 'ring';

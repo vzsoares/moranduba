@@ -9,6 +9,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/vzsoares/moranduba/sfu/internal/media"
+	"github.com/vzsoares/moranduba/sfu/internal/push"
 	"github.com/vzsoares/moranduba/sfu/internal/state"
 	"github.com/vzsoares/moranduba/sfu/internal/turnsrv"
 	"github.com/vzsoares/moranduba/sfu/internal/wire"
@@ -132,5 +133,36 @@ func TestPingClaimAllowJoin(t *testing.T) {
 	if r := call(t, h, member, wire.Request{Type: "join", ID: "j4", Room: "r", SDP: c.offer()}); field[string](t, r, "type") != "answer" ||
 		field[string](t, r, "room") != "r" || !strings.Contains(field[string](t, r, "sdp"), "a=candidate") {
 		t.Fatalf("member join: %v", r)
+	}
+}
+
+func TestPushNeedsAnAllowedSender(t *testing.T) {
+	h := newTestHandler(t)
+	pushes, err := push.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Push = pushes
+	owner := nostr.Generate().Public().Hex()
+	stranger := nostr.Generate().Public().Hex()
+	call(t, h, owner, wire.Request{Type: "claim", ID: "c", Code: h.Store.ClaimCode()})
+
+	if _, ok := call(t, h, stranger, wire.Request{Type: "ping", ID: "p0"})["push_key"]; ok {
+		t.Fatal("stranger got the push key")
+	}
+	if field[string](t, call(t, h, owner, wire.Request{Type: "ping", ID: "p1"}), "push_key") != pushes.PublicKey() {
+		t.Fatal("owner did not get the push key")
+	}
+	sub := wire.Request{Type: "push_subscribe", ID: "s0", Endpoint: "https://push.example/x", P256dh: "k", Auth: "a"}
+	if field[string](t, call(t, h, stranger, sub), "message") != "not allowed" {
+		t.Fatal("stranger subscribed")
+	}
+	sub.ID = "s1"
+	if field[string](t, call(t, h, owner, sub), "type") != "ok" {
+		t.Fatal("owner could not subscribe")
+	}
+	ring := wire.Request{Type: "ring", ID: "r0", Pubkeys: []string{stranger}, Call: "abc"}
+	if field[int](t, call(t, h, owner, ring), "count") != 0 {
+		t.Fatal("rang someone outside the allowlist")
 	}
 }

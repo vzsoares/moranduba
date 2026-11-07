@@ -9,12 +9,16 @@ import (
 	"time"
 
 	"github.com/vzsoares/moranduba/sfu/internal/media"
+	"github.com/vzsoares/moranduba/sfu/internal/push"
 	"github.com/vzsoares/moranduba/sfu/internal/state"
 	"github.com/vzsoares/moranduba/sfu/internal/turnsrv"
 	"github.com/vzsoares/moranduba/sfu/internal/wire"
 )
 
-const joinTimeout = 10 * time.Second
+const (
+	joinTimeout = 10 * time.Second
+	ringTimeout = 15 * time.Second
+)
 
 // Inbound is an authenticated request: Sender is the seal signer (hex).
 type Inbound struct {
@@ -30,6 +34,8 @@ type Handler struct {
 	ICEHost  string
 	TURNPort int
 	Version  string
+	// Push rings members' devices; nil turns push off.
+	Push *push.Store
 }
 
 func (h *Handler) Handle(ctx context.Context, in Inbound) wire.Reply {
@@ -38,7 +44,11 @@ func (h *Handler) Handle(ctx context.Context, in Inbound) wire.Reply {
 	case "ping":
 		owner := h.Store.IsOwner(in.Sender)
 		allowed := h.Store.IsAllowed(in.Sender)
-		return wire.Pong(req.ID, owner, allowed, h.ICEServers(in.Sender, allowed, time.Now()), h.Version)
+		pong := wire.Pong(req.ID, owner, allowed, h.ICEServers(in.Sender, allowed, time.Now()), h.Version)
+		if h.Push != nil && allowed {
+			pong.PushKey = h.Push.PublicKey()
+		}
+		return pong
 	case "claim":
 		if err := h.Store.Claim(in.Sender, req.Code); err != nil {
 			return wire.Error(req.ID, errMessage(err))
@@ -64,8 +74,57 @@ func (h *Handler) Handle(ctx context.Context, in Inbound) wire.Reply {
 			return wire.Error(req.ID, "join failed: "+err.Error())
 		}
 		return wire.Answer(req.ID, req.Room, answer)
+	case "push_subscribe", "push_unsubscribe", "ring":
+		return h.handlePush(ctx, in)
 	default:
 		return wire.Error(req.ID, "unknown type")
+	}
+}
+
+func (h *Handler) handlePush(ctx context.Context, in Inbound) wire.Reply {
+	req := in.Req
+	if h.Push == nil {
+		return wire.Error(req.ID, "push is off")
+	}
+	if !h.Store.IsAllowed(in.Sender) {
+		return wire.Error(req.ID, "not allowed")
+	}
+	switch req.Type {
+	case "push_subscribe":
+		err := h.Push.Subscribe(in.Sender, push.Device{Endpoint: req.Endpoint, P256dh: req.P256dh, Auth: req.Auth})
+		if errors.Is(err, push.ErrBadSubscription) {
+			return wire.Error(req.ID, err.Error())
+		}
+		if err != nil {
+			return wire.Error(req.ID, "internal error")
+		}
+		return wire.Done(req.ID)
+	case "push_unsubscribe":
+		if err := h.Push.Unsubscribe(in.Sender, req.Endpoint); err != nil {
+			return wire.Error(req.ID, "internal error")
+		}
+		return wire.Done(req.ID)
+	default:
+		var targets []string
+		for _, pk := range req.Pubkeys {
+			if h.Store.IsAllowed(pk) {
+				targets = append(targets, pk)
+			}
+		}
+		msg := push.Message{Type: "ring", From: in.Sender, CallID: req.Call}
+		if req.Stop {
+			msg.Type = "stop"
+		}
+		ctx, cancel := context.WithTimeout(ctx, ringTimeout)
+		defer cancel()
+		count, err := h.Push.Ring(ctx, in.Sender, targets, msg, time.Now())
+		if errors.Is(err, push.ErrTooSoon) {
+			return wire.Error(req.ID, err.Error())
+		}
+		if err != nil {
+			return wire.Error(req.ID, "internal error")
+		}
+		return wire.Rang(req.ID, count)
 	}
 }
 

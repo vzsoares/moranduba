@@ -8,6 +8,13 @@ type Request struct {
 	Pubkeys []string `json:"pubkeys,omitempty"`
 	Room    string   `json:"room,omitempty"`
 	SDP     string   `json:"sdp,omitempty"`
+	// Push subscription (Web Push or UnifiedPush), for push_subscribe.
+	Endpoint string `json:"endpoint,omitempty"`
+	P256dh   string `json:"p256dh,omitempty"`
+	Auth     string `json:"auth,omitempty"`
+	// For ring: the call, and whether it stopped ringing.
+	Call string `json:"call,omitempty"`
+	Stop bool   `json:"stop,omitempty"`
 }
 
 // ICEServer mirrors RTCIceServer.
@@ -25,6 +32,7 @@ type Reply struct {
 	Allowed    *bool       `json:"allowed,omitempty"`
 	ICEServers []ICEServer `json:"ice_servers,omitzero"`
 	Version    string      `json:"version,omitempty"`
+	PushKey    string      `json:"push_key,omitempty"`
 	Count      *int        `json:"count,omitempty"`
 	Room       string      `json:"room,omitempty"`
 	SDP        string      `json:"sdp,omitempty"`
@@ -50,4 +58,10 @@ func Answer(replyTo, room, sdp string) Reply {
 
 func Error(replyTo, message string) Reply {
 	return Reply{Type: "error", ReplyTo: replyTo, Message: message}
+}
+
+func Done(replyTo string) Reply { return Reply{Type: "ok", ReplyTo: replyTo} }
+
+func Rang(replyTo string, count int) Reply {
+	return Reply{Type: "rang", ReplyTo: replyTo, Count: &count}
 }

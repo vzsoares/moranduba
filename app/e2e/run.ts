@@ -25,6 +25,9 @@ const browser = await puppeteer.launch({
 
 const results = roles.map(async (role, i) => {
   const page = await browser.newPage();
+  await browser
+    .defaultBrowserContext()
+    .overridePermissions(new URL(base).origin, ["notifications"]);
   const peers = pubkeys.filter((_, j) => j !== i).join(",");
   const done = new Promise<boolean>((resolve) => {
     page.on("console", (message) => {

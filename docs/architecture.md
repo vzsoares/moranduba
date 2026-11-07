@@ -146,6 +146,17 @@ Any participant can switch the mode by hand at any time. A switch names the
 SFU the initiator reached, so everyone moves to the same one. The UI shows
 the current mode and a one-tap switch.
 
+### Call push
+
+An SFU keeps a VAPID key and, per allowed member, up to eight push
+subscriptions (`push.json`). With notifications on, the app sends
+`push_subscribe` to every SFU its groups use: web through a service worker
+registration per SFU (one subscription each), Android through UnifiedPush.
+Starting a call sends `ring` with the group's members to its SFUs; the SFU
+pushes only to allowlisted members, at most once per 10 s per caller, and
+`stop` when the call ends. The payload is the caller's pubkey and the call
+id, no group name: the woken app finds the call through presence.
+
 ### Mid-call switch (make before break)
 
 ```mermaid
@@ -255,8 +266,11 @@ media viewer, landing page.
 1. **TURN without a server.** In `mesh` and `host_peer` with no VPS, roughly
    10–20% of peer pairs can't connect directly. Options: a public TURN service,
    routing through another member, or a community list of TURN servers.
-2. **Incoming-call push on mobile.** APNs and FCM need a server to send the
-   push. Options: a Nostr push relay, or a group's SFU acting as push proxy.
+2. **Incoming-call push on iOS apps.** Each SFU rings members' devices
+   through Web Push (browsers, iOS home-screen web apps) and UnifiedPush
+   (Android, with a distributor such as ntfy); see "Call push" below.
+   Native iOS and Firebase push need the publisher's Apple and Google
+   credentials, so a self-hosted SFU cannot send them.
 3. **MDK exporter API.** Confirm MDK exposes `MLS-Exporter` with a custom label
    for the call key. If not, derive the call key via HKDF from the MIP-04
    exporter secret with a distinct info string.

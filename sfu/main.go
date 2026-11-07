@@ -19,6 +19,7 @@ import (
 
 	"github.com/vzsoares/moranduba/sfu/internal/config"
 	"github.com/vzsoares/moranduba/sfu/internal/media"
+	"github.com/vzsoares/moranduba/sfu/internal/push"
 	"github.com/vzsoares/moranduba/sfu/internal/server"
 	"github.com/vzsoares/moranduba/sfu/internal/state"
 	"github.com/vzsoares/moranduba/sfu/internal/turnsrv"
@@ -94,6 +95,11 @@ func run() error {
 	}
 	defer sfu.Close()
 
+	pushes, err := push.Open(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("push: %w", err)
+	}
+
 	handler := &server.Handler{
 		Store:    store,
 		SFU:      sfu,
@@ -101,6 +107,7 @@ func run() error {
 		ICEHost:  iceHost,
 		TURNPort: turnPort,
 		Version:  version,
+		Push:     pushes,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
