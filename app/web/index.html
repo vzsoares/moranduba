@@ -42,7 +42,8 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
-  <!-- MLS engine (wasm), built by tool/build_web_mls.sh. -->
+  <script src="e2ee_receivers.js"></script>
+  <!-- MLS engine (wasm), built by tool/build_web_assets.sh. -->
   <script type="module">
     import init, { mlsCall } from "./mls/moranduba_mls.js";
     window.morandubaMls = { ready: init(), mlsCall };

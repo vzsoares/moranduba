@@ -190,6 +190,25 @@ class RustGroupEngine implements GroupEngine {
           _ => null,
         },
         message: r['message'] == null ? null : _message(r['message']),
+        signal: switch (r) {
+          {
+            'group_id': final String groupId,
+            'signal': {
+              'id': final String id,
+              'sender': final String sender,
+              'payload': final String payload,
+              'created_at': final int createdAt,
+            },
+          } =>
+            GroupSignal(
+              id: id,
+              groupId: groupId,
+              sender: sender,
+              payload: payload,
+              createdAt: createdAt,
+            ),
+          _ => null,
+        },
         publish: switch (r['publish']) {
           final String event => event,
           _ => null,
@@ -263,6 +282,36 @@ class RustGroupEngine implements GroupEngine {
     ),
   );
 
+  /// Saved before returning, like [encryptText].
+  @override
+  Future<String> sendSignal(String groupId, String payload) async {
+    final event = _string(
+      _call('send_signal', {'group_id': groupId, 'payload': payload}),
+    );
+    await _saveNow();
+    return event;
+  }
+
+  @override
+  Future<ExportedSecret> exportSecret(
+    String groupId, {
+    required String label,
+    required String context,
+    int length = 32,
+  }) async {
+    final reply = _call('export_secret', {
+      'group_id': groupId,
+      'label': label,
+      'context': context,
+      'length': length,
+    });
+    return switch (reply) {
+      {'secret': final String secret, 'epoch': final int epoch} =>
+        ExportedSecret(secret: _hexBytes(secret), epoch: epoch),
+      _ => throw FormatException('export_secret: $reply'),
+    };
+  }
+
   @override
   Future<List<GroupMessage>> messages(String groupId) async => [
     for (final m in _list(_call('messages', {'group_id': groupId})))
@@ -331,6 +380,7 @@ GroupInfo _group(Object? json) => switch (json) {
     'admins': final admins,
     'member_count': final int memberCount,
     'last_message_at': final int? lastMessageAt,
+    'epoch': final int epoch,
   } =>
     GroupInfo(
       id: id,
@@ -339,6 +389,7 @@ GroupInfo _group(Object? json) => switch (json) {
       relays: _strings(relays),
       admins: _strings(admins),
       memberCount: memberCount,
+      epoch: epoch,
       lastMessageAt: lastMessageAt,
     ),
   _ => throw FormatException('group: $json'),
@@ -387,6 +438,11 @@ MediaRef _media(Object? json) => switch (json) {
     ),
   _ => throw FormatException('media: $json'),
 };
+
+Uint8List _hexBytes(String hex) => Uint8List.fromList([
+  for (var i = 0; i < hex.length; i += 2)
+    int.parse(hex.substring(i, i + 2), radix: 16),
+]);
 
 String _string(Object? json) => switch (json) {
   final String value => value,

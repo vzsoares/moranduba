@@ -20,6 +20,8 @@ use serde_json::{json, Value};
 
 const KEY_PACKAGE_KIND: u16 = 30443;
 const CHAT_KIND: u16 = 9;
+/// Call signaling inside the group (*provisional* kind, ours).
+const SIGNAL_KIND: u16 = 25050;
 const SNAPSHOT_MAGIC: &[u8; 4] = b"MSN1";
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -50,6 +52,7 @@ struct GroupDto {
     admins: Vec<String>,
     member_count: usize,
     last_message_at: Option<u64>,
+    epoch: u64,
 }
 
 #[derive(Serialize)]
@@ -130,6 +133,8 @@ impl Engine {
             "encrypt_media" => self.encrypt_media(args),
             "send_media" => self.send_media(args),
             "decrypt_media" => self.decrypt_media(args),
+            "send_signal" => self.send_signal(args),
+            "export_secret" => self.export_secret(args),
             _ => Err(format!("unknown method {method}")),
         }
     }
@@ -303,6 +308,19 @@ impl Engine {
         let event = Event::from_json(str_arg(&args, "event")?).map_err(err)?;
         let result = self.mdk.process_message(&event).map_err(err)?;
         Ok(match result {
+            MessageProcessingResult::ApplicationMessage(m)
+                if m.kind == Kind::Custom(SIGNAL_KIND) =>
+            {
+                json!({
+                    "group_id": hex::encode(m.mls_group_id.as_slice()),
+                    "signal": {
+                        "id": m.id.to_hex(),
+                        "sender": m.pubkey.to_hex(),
+                        "payload": m.content,
+                        "created_at": m.created_at.as_secs(),
+                    },
+                })
+            }
             MessageProcessingResult::ApplicationMessage(m) => json!({
                 "group_id": hex::encode(m.mls_group_id.as_slice()),
                 "message": self.message_dto(&m),
@@ -462,6 +480,38 @@ impl Engine {
         Ok(json!(BASE64.encode(plain)))
     }
 
+    fn send_signal(&self, args: Value) -> Result<Value> {
+        let rumor = EventBuilder::new(Kind::Custom(SIGNAL_KIND), str_arg(&args, "payload")?)
+            .build(self.keys.public_key());
+        let event = self
+            .mdk
+            .create_message(&group_id(&args)?, rumor, None)
+            .map_err(err)?;
+        Ok(json!(event.as_json()))
+    }
+
+    /// MLS-Exporter on the current epoch, hex. Returns the epoch it used.
+    fn export_secret(&self, args: Value) -> Result<Value> {
+        let gid = group_id(&args)?;
+        let length = args["length"].as_u64().ok_or("missing length")? as usize;
+        let secret = self
+            .mdk
+            .export_secret(
+                &gid,
+                str_arg(&args, "label")?,
+                str_arg(&args, "context")?.as_bytes(),
+                length,
+            )
+            .map_err(err)?;
+        let epoch = self
+            .mdk
+            .get_group(&gid)
+            .map_err(err)?
+            .ok_or("group not found")?
+            .epoch;
+        Ok(json!({ "secret": hex::encode(secret), "epoch": epoch }))
+    }
+
     fn message_dto(&self, m: &Message) -> MessageDto {
         let manager = self.mdk.media_manager(m.mls_group_id.clone());
         let media = m
@@ -510,6 +560,7 @@ impl Engine {
                 .map_err(err)?
                 .len(),
             last_message_at: group.last_message_at.map(|t| t.as_secs()),
+            epoch: group.epoch,
         })
     }
 }

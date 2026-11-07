@@ -47,5 +47,6 @@ app.*.map.json
 # Widget Preview related
 .widget_preview/
 
-# Built by tool/build_web_mls.sh
+# Built by tool/build_web_assets.sh
 /web/mls/
+/web/e2ee.worker.dart.js

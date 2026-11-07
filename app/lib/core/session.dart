@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
+import 'calls/calls.dart';
 import 'friend_list.dart';
 import 'groups/blossom.dart';
 import 'groups/group_engine.dart';
@@ -52,6 +53,7 @@ class Session extends ChangeNotifier {
   final Identity identity;
   final List<String> relays;
   Groups? groups;
+  Calls? calls;
   Object? groupsError;
   final Ndk _ndk;
   final FriendList _friendList;
@@ -97,6 +99,7 @@ class Session extends ChangeNotifier {
       );
       await started.start();
       groups = started;
+      calls = Calls(started);
       // Welcomes that arrived before groups were up.
       for (final wrapped in _unhandledWraps) {
         await started.onGiftWrap(wrapped);
@@ -214,6 +217,7 @@ class Session extends ChangeNotifier {
 
   /// Closes the session and deletes this identity's group state.
   Future<void> wipe() async {
+    await calls?.close();
     await groups?.wipe();
     await close();
   }
@@ -221,6 +225,7 @@ class Session extends ChangeNotifier {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    await calls?.close();
     await groups?.close();
     if (_saveTimer?.isActive ?? false) {
       _saveTimer!.cancel();

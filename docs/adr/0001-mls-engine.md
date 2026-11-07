@@ -24,7 +24,7 @@ What we found:
 `app/rust/` is our own crate over `mdk-core` 0.8 and `mdk-memory-storage`,
 built for desktop through a Dart build hook (`hook/build.dart`, the same
 `native_toolchain_rust` path `ndk` uses) and for the browser with
-wasm-bindgen (`tool/build_web_mls.sh`).
+wasm-bindgen (`tool/build_web_assets.sh`).
 
 - One entry point, `call(handle, method, json) -> json`: `@Native` FFI on
   desktop, `mlsCall` in wasm. No codegen.

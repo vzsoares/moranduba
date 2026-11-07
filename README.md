@@ -18,7 +18,7 @@ toolchain (1.98.1) installs itself on first build.
 ```sh
 docker compose -f dev/docker-compose.yml up -d   # relay :7777, Blossom :8800
 cd app
-./tool/build_web_mls.sh                          # wasm engine, web only
+./tool/build_web_assets.sh                          # wasm engine, web only
 flutter run -d chrome \
   --dart-define=MORANDUBA_RELAYS=ws://localhost:7777 \
   --dart-define=MORANDUBA_BLOSSOM=http://localhost:8800

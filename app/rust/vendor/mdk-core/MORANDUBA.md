@@ -6,3 +6,6 @@ wasm32-unknown-unknown. `web_time` re-exports std on native targets.
 
 Patch: `pending_removed_members_pubkeys` in `src/groups.rs` also reports the
 sender of a pending SelfRemove, so members can agree on who commits a leave.
+
+Patch: `export_secret` in `src/groups.rs` exposes the MLS exporter, used to
+derive call keys.

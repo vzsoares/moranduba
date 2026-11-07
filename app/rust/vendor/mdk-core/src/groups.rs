@@ -400,6 +400,20 @@ where
         self.load_mls_group_impl(group_id)
     }
 
+    /// Moranduba patch: MLS-Exporter on the group's current epoch.
+    pub fn export_secret(
+        &self,
+        group_id: &GroupId,
+        label: &str,
+        context: &[u8],
+        length: usize,
+    ) -> Result<Vec<u8>, Error> {
+        let mls_group = self.load_mls_group(group_id)?.ok_or(Error::GroupNotFound)?;
+        mls_group
+            .export_secret(self.provider.crypto(), label, context, length)
+            .map_err(|e| Error::Group(e.to_string()))
+    }
+
     fn derive_exporter_secret_for_group(
         &self,
         group_id: &crate::GroupId,

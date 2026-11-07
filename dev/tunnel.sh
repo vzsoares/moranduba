@@ -45,7 +45,7 @@ blossom="$(url_of blossom)"
 app="$(url_of app)"
 
 cd "$root/app"
-./tool/build_web_mls.sh >/dev/null
+./tool/build_web_assets.sh >/dev/null
 flutter build web \
   --output "$root/build/tunnel" \
   --dart-define=MORANDUBA_RELAYS="wss://${relay#https://}" \

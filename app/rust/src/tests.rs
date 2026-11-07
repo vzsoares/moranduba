@@ -332,3 +332,40 @@ fn image_attachment_round_trip() {
     // MDK strips metadata, so compare pixels' container, not exact bytes.
     assert!(decoded.starts_with(&original[..8]), "still a PNG");
 }
+
+#[test]
+fn signals_and_call_keys_agree() {
+    let alice = Peer::new();
+    let bob = Peer::new();
+    let created = alice.call(
+        "create_group",
+        json!({ "name": "call", "relays": RELAYS, "key_packages": [bob.key_package()] }),
+    );
+    let group = created["group"]["id"].as_str().unwrap().to_string();
+    bob.join(&created["welcomes"][0]);
+
+    let signal = alice.call(
+        "send_signal",
+        json!({ "group_id": group, "payload": "{\"type\":\"join\"}" }),
+    );
+    let got = bob.call("receive", json!({ "event": signal }));
+    assert_eq!(got["signal"]["payload"], json!("{\"type\":\"join\"}"));
+    assert!(got.get("message").is_none());
+    assert_eq!(
+        bob.call("messages", json!({ "group_id": group })),
+        json!([]),
+        "signals stay out of the chat"
+    );
+
+    let args =
+        json!({ "group_id": group, "label": "moranduba", "context": "call:x", "length": 32 });
+    let a = alice.call("export_secret", args.clone());
+    let b = bob.call("export_secret", args);
+    assert_eq!(a, b);
+    assert_eq!(a["secret"].as_str().unwrap().len(), 64);
+    let other = alice.call(
+        "export_secret",
+        json!({ "group_id": group, "label": "moranduba", "context": "call:y", "length": 32 }),
+    );
+    assert_ne!(a["secret"], other["secret"]);
+}

@@ -65,6 +65,17 @@ abstract interface class GroupEngine {
     MediaRef media,
   );
 
+  /// A call signal (offer, answer, presence) as a group event (kind 445).
+  Future<String> sendSignal(String groupId, String payload);
+
+  /// MLS-Exporter on the group's current epoch.
+  Future<ExportedSecret> exportSecret(
+    String groupId, {
+    required String label,
+    required String context,
+    int length = 32,
+  });
+
   /// Stored chat messages, oldest first.
   Future<List<GroupMessage>> messages(String groupId);
 
@@ -85,6 +96,7 @@ class GroupInfo {
     required this.relays,
     required this.admins,
     required this.memberCount,
+    this.epoch = 0,
     this.lastMessageAt,
   });
 
@@ -97,6 +109,9 @@ class GroupInfo {
   final List<String> relays;
   final List<String> admins;
   final int memberCount;
+
+  /// MLS epoch; moves on every membership change.
+  final int epoch;
 
   /// Unix seconds.
   final int? lastMessageAt;
@@ -198,12 +213,39 @@ class MembersAdded {
   final List<String> welcomeRumors;
 }
 
+class ExportedSecret {
+  const ExportedSecret({required this.secret, required this.epoch});
+
+  final Uint8List secret;
+  final int epoch;
+}
+
+/// A call signal from a member; [payload] is JSON.
+class GroupSignal {
+  const GroupSignal({
+    required this.id,
+    required this.groupId,
+    required this.sender,
+    required this.payload,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String groupId;
+  final String sender;
+  final String payload;
+
+  /// Unix seconds.
+  final int createdAt;
+}
+
 /// What processing one group event produced.
 class GroupReceipt {
-  const GroupReceipt({this.groupId, this.message, this.publish});
+  const GroupReceipt({this.groupId, this.message, this.signal, this.publish});
 
   final String? groupId;
   final GroupMessage? message;
+  final GroupSignal? signal;
 
   /// A commit we made in response (an auto-committed leave). Publish it,
   /// then [GroupEngine.merge].

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs tool/wasm_lifecycle.cjs against a Node build of the wasm engine.
-# Run from app/ after tool/build_web_mls.sh.
+# Run from app/ after tool/build_web_assets.sh.
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
 out="$(mktemp -d)"

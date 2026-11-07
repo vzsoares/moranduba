@@ -44,6 +44,7 @@ class Groups extends ChangeNotifier {
   final GroupEngine _engine;
   final BlossomClient _blossom;
   final Map<String, Future<Uint8List>> _media = {};
+  final _signals = StreamController<GroupSignal>.broadcast();
 
   List<GroupInfo> _groups = [];
   List<GroupInvite> _invites = [];
@@ -72,6 +73,24 @@ class Groups extends ChangeNotifier {
 
   List<GroupMessage> messagesIn(String groupId) =>
       List.unmodifiable(_messages[groupId] ?? const <GroupMessage>[]);
+
+  /// Call signals from other members, as they arrive.
+  Stream<GroupSignal> get signals => _signals.stream;
+
+  Future<void> sendSignal(String groupId, String payload) async {
+    final info = _require(groupId);
+    final event = await _serial(() => _engine.sendSignal(groupId, payload));
+    await _publish(_event(event), info.relays);
+  }
+
+  /// The call key for [callId] on the group's current epoch.
+  Future<ExportedSecret> callKey(String groupId, String callId) => _serial(
+    () => _engine.exportSecret(
+      groupId,
+      label: 'moranduba',
+      context: 'call:$callId',
+    ),
+  );
 
   Future<List<String>> members(String groupId) =>
       _serial(() => _engine.members(groupId));
@@ -212,6 +231,7 @@ class Groups extends ChangeNotifier {
     if (_closed) return;
     _closed = true;
     _refreshTimer?.cancel();
+    await _signals.close();
     await _events?.cancel();
     final id = _subscriptionId;
     if (id != null) await _ndk.requests.closeSubscription(id);
@@ -297,7 +317,10 @@ class Groups extends ChangeNotifier {
         final groupId = receipt.groupId;
         final message = receipt.message;
         final commit = receipt.publish;
-        if (message != null) {
+        final signal = receipt.signal;
+        if (signal != null) {
+          if (signal.sender != me) _signals.add(signal);
+        } else if (message != null) {
           _upsert(message);
         } else if (commit != null && groupId != null) {
           final info = group(groupId);

@@ -6,7 +6,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 out="$root/build/site"
 
 cd "$root/app"
-./tool/build_web_mls.sh
+./tool/build_web_assets.sh
 args=(--release --base-href /app/)
 if [ -n "${MORANDUBA_RELAYS:-}" ]; then
   args+=("--dart-define=MORANDUBA_RELAYS=$MORANDUBA_RELAYS")

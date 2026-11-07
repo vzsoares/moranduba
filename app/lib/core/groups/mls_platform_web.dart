@@ -23,7 +23,7 @@ class _WebMlsBridge implements MlsBridge {
     final module = _module;
     if (module == null) {
       throw StateError(
-        'MLS engine not loaded. Build it with tool/build_web_mls.sh',
+        'MLS engine not loaded. Build it with tool/build_web_assets.sh',
       );
     }
     await module.ready.toDart;
