@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "io.github.vzsoares.moranduba"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_local_notifications and androidx.core need 37; Flutter defaults to 36.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
