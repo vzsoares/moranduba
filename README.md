@@ -38,6 +38,10 @@ build hook compiles the engine for that platform. Per platform:
 | Windows | Visual Studio with "Desktop development with C++" |
 | Linux | clang, cmake, ninja, pkg-config, GTK 3 and libsecret dev packages (Arch: `pacman -S clang cmake ninja gtk3 libsecret`) |
 
+Desktop builds can host calls (host peer): after `flutter build <platform>`,
+`./tool/bundle_sfu.sh <platform>` puts the Go SFU next to the app executable
+(needs Go). `MORANDUBA_SFU_BIN` points a dev run at any SFU binary.
+
 Two browser identities: serve the web build on two ports (each origin keeps
 its own key).
 
@@ -55,7 +59,12 @@ flutter test --run-skipped -t relay   # end to end, needs the dev relay
 (cd rust && cargo test)               # engine
 ./tool/test_web_mls.sh                # engine as wasm, under Node
 ./e2e/run.sh                          # encrypted call, two headless Chromes
+(cd ../sfu && go test ./...)          # SFU
 ```
+
+Calls through a local SFU: run `DATA_DIR=./.data go run .` in `sfu/`, then
+`E2E_QUERY='&sfu=<pubkey>&code=<claim code>&switch=1' ./e2e/run.sh` with the
+values from its `MORANDUBA_SFU` line (`&split=1` checks the mesh fallback).
 
 ## Deploy
 
