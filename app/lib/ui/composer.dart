@@ -1,3 +1,4 @@
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -5,12 +6,20 @@ import 'theme.dart';
 
 /// Message input bar. [onSend] throwing keeps the text for a retry.
 class Composer extends StatefulWidget {
-  const Composer({super.key, required this.onSend, this.onAttach});
+  const Composer({
+    super.key,
+    required this.onSend,
+    this.onAttach,
+    this.customEmojis,
+  });
 
   final Future<void> Function(String text) onSend;
 
   /// Shows an attach button when set.
   final Future<void> Function()? onAttach;
+
+  /// A second emoji tab (the group's own), given a way to insert text.
+  final Widget Function(ValueChanged<String> insert)? customEmojis;
 
   @override
   State<Composer> createState() => _ComposerState();
@@ -21,6 +30,7 @@ class _ComposerState extends State<Composer> {
   final _focus = FocusNode();
   bool _sending = false;
   bool _attaching = false;
+  bool _emojis = false;
 
   @override
   void dispose() {
@@ -58,6 +68,64 @@ class _ComposerState extends State<Composer> {
     }
   }
 
+  /// Puts [text] at the cursor, replacing any selection.
+  void _insert(String text) {
+    final value = _input.value;
+    final selection = value.selection.isValid
+        ? value.selection
+        : TextSelection.collapsed(offset: value.text.length);
+    _input.value = value.copyWith(
+      text: value.text.replaceRange(selection.start, selection.end, text),
+      selection: TextSelection.collapsed(offset: selection.start + text.length),
+    );
+  }
+
+  Widget _emojiPanel() {
+    final picker = LayoutBuilder(
+      builder: (context, constraints) => EmojiPicker(
+        textEditingController: _input,
+        config: Config(
+          height: 280,
+          checkPlatformCompatibility: true,
+          emojiViewConfig: EmojiViewConfig(
+            backgroundColor: MangaColors.paper,
+            // About 48 px per emoji, whatever the window width.
+            columns: (constraints.maxWidth / 48).floor().clamp(7, 24),
+            emojiSizeMax: 26,
+          ),
+          categoryViewConfig: const CategoryViewConfig(
+            backgroundColor: MangaColors.paper,
+            indicatorColor: MangaColors.ink,
+            iconColorSelected: MangaColors.ink,
+          ),
+          bottomActionBarConfig: const BottomActionBarConfig(enabled: false),
+          searchViewConfig: const SearchViewConfig(
+            backgroundColor: MangaColors.paper,
+          ),
+        ),
+      ),
+    );
+    final custom = widget.customEmojis;
+    if (custom == null) return SizedBox(height: 280, child: picker);
+    return SizedBox(
+      height: 320,
+      child: DefaultTabController(
+        length: 2,
+        child: Column(
+          children: [
+            const TabBar(
+              tabs: [
+                Tab(height: 40, text: 'Emoji'),
+                Tab(height: 40, text: 'Group'),
+              ],
+            ),
+            Expanded(child: TabBarView(children: [picker, custom(_insert)])),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _attach(Future<void> Function() attach) async {
     setState(() => _attaching = true);
     try {
@@ -76,42 +144,55 @@ class _ComposerState extends State<Composer> {
     ),
     child: SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
-        child: Row(
-          children: [
-            if (widget.onAttach case final attach?) ...[
-              IconButton(
-                tooltip: 'Attach a file',
-                onPressed: _attaching ? null : () => _attach(attach),
-                icon: _attaching
-                    ? const SizedBox.square(
-                        dimension: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.attach_file),
-              ),
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: TextField(
-                controller: _input,
-                focusNode: _focus,
-                autofocus: true,
-                minLines: 1,
-                maxLines: 5,
-                textInputAction: TextInputAction.send,
-                decoration: const InputDecoration(hintText: 'Message'),
-                onSubmitted: (_) => _send(),
-              ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_emojis) _emojiPanel(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: _emojis ? 'Close emojis' : 'Emojis',
+                  isSelected: _emojis,
+                  icon: const Icon(Icons.emoji_emotions_outlined),
+                  selectedIcon: const Icon(Icons.emoji_emotions),
+                  onPressed: () => setState(() => _emojis = !_emojis),
+                ),
+                if (widget.onAttach case final attach?) ...[
+                  IconButton(
+                    tooltip: 'Attach a file',
+                    onPressed: _attaching ? null : () => _attach(attach),
+                    icon: _attaching
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.attach_file),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  child: TextField(
+                    controller: _input,
+                    focusNode: _focus,
+                    autofocus: true,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.send,
+                    decoration: const InputDecoration(hintText: 'Message'),
+                    onSubmitted: (_) => _send(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                FilledButton(
+                  onPressed: _sending ? null : _send,
+                  child: Text(_sending ? 'Sending…' : 'Send'),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            FilledButton(
-              onPressed: _sending ? null : _send,
-              child: Text(_sending ? 'Sending…' : 'Send'),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     ),
   );

@@ -9,6 +9,7 @@ import 'calls/calls.dart';
 import 'calls/host_peer.dart';
 import 'calls/sfu_book.dart';
 import 'calls/sfu_client.dart';
+import 'emojis.dart';
 import 'expiry.dart';
 import 'friend_list.dart';
 import 'friend_protocol.dart';
@@ -34,6 +35,7 @@ class Session extends ChangeNotifier {
     this._blossom,
     this.servers,
     this.callLogs,
+    this.emojis,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -69,6 +71,10 @@ class Session extends ChangeNotifier {
     await sfus.load();
     final logs = CallLogBook(await openStore('${identity.publicKey}-calllog'));
     await logs.load();
+    final emojiBook = EmojiBook(
+      await openStore('${identity.publicKey}-emojis'),
+    );
+    await emojiBook.load();
     final session = Session._(
       identity,
       ndk,
@@ -79,6 +85,7 @@ class Session extends ChangeNotifier {
       files,
       sfus,
       logs,
+      emojiBook,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -101,6 +108,8 @@ class Session extends ChangeNotifier {
   final Map<String, Future<Uint8List>> _dmFiles = {};
   final SfuBook servers;
   final CallLogBook callLogs;
+  final EmojiBook emojis;
+  final Map<String, Future<Uint8List>> _emojiImages = {};
   late final SfuClient sfuClient = SfuClient(
     _ndk,
     me: identity.publicKey,
@@ -177,6 +186,7 @@ class Session extends ChangeNotifier {
       started.addListener(_shareProfileSoon);
       started.addListener(_announceExpiriesSoon);
       started.addListener(_announceCallLogsSoon);
+      started.addListener(_announceEmojisSoon);
       started.addListener(_announceServersSoon);
       started.addListener(_syncAllowlistsSoon);
       // Welcomes that arrived before groups were up.
@@ -313,6 +323,8 @@ class Session extends ChangeNotifier {
             if (!_closed) notifyListeners();
           }),
         );
+      case {'t': 'emojis', 'emojis': final List<Object?> list}:
+        unawaited(_receiveEmojis(signal.groupId, list));
       case {'t': 'calllog', 'log': final Object? json}:
         final setting = CallLogSetting.fromJson(json);
         if (setting == null) return;
@@ -457,6 +469,110 @@ class Session extends ChangeNotifier {
         'pubkeys': [...members],
       });
       _allowSent[sfu] = members;
+    }
+  }
+
+  Future<void> _receiveEmojis(String groupId, List<Object?> list) async {
+    var changed = false;
+    for (final json in list) {
+      if (CustomEmoji.fromJson(json) case final emoji?) {
+        changed = await emojis.put(groupId, emoji) || changed;
+      }
+    }
+    if (!changed) return;
+    if (groups?.group(groupId)?.epoch case final epoch?) {
+      await emojis.markAnnounced(groupId, epoch);
+    }
+    if (!_closed) notifyListeners();
+  }
+
+  /// [groupId]'s custom emojis, by name.
+  Map<String, PictureRef> emojisOf(String groupId) => emojis.of(groupId);
+
+  /// Uploads [image] encrypted and adds it to [groupId] as `:name:`,
+  /// replacing an emoji of that name.
+  Future<void> addEmoji(
+    String groupId,
+    String name,
+    Uint8List image, {
+    required String mime,
+  }) async {
+    if (!emojiPattern.hasMatch(':$name:')) {
+      throw ArgumentError.value(name, 'name', 'use a-z, 0-9 and _');
+    }
+    final (sealed, finish) = await encryptPicture(image, mime);
+    final picture = finish(await _blossom.upload(sealed));
+    await _setEmoji(groupId, name, picture);
+  }
+
+  Future<void> removeEmoji(String groupId, String name) =>
+      _setEmoji(groupId, name, null);
+
+  Future<void> _setEmoji(
+    String groupId,
+    String name,
+    PictureRef? picture,
+  ) async {
+    final now = _now();
+    final previous = emojis.setAt(groupId, name) ?? 0;
+    await emojis.put(
+      groupId,
+      CustomEmoji(
+        name: name,
+        picture: picture,
+        setAt: now > previous ? now : previous + 1,
+      ),
+    );
+    notifyListeners();
+    await _announceEmojis(groupId);
+  }
+
+  /// The decrypted image of [picture], fetched once per session.
+  Future<Uint8List> emojiImage(PictureRef picture) {
+    final cached = _emojiImages[picture.url];
+    if (cached != null) return cached;
+    final loading = _blossom
+        .download(picture.url)
+        .then((sealed) => decryptPicture(sealed, picture));
+    _emojiImages[picture.url] = loading;
+    loading.ignore();
+    return loading.catchError((Object e) {
+      _emojiImages.remove(picture.url);
+      throw e;
+    });
+  }
+
+  Future<void> _announceEmojis(String groupId) async {
+    final g = groups;
+    final list = emojis.entries(groupId);
+    if (g == null || list.isEmpty) return;
+    await g.sendSignal(
+      groupId,
+      jsonEncode({
+        't': 'emojis',
+        'emojis': [for (final emoji in list) emoji.toJson()],
+      }),
+    );
+    if (g.group(groupId)?.epoch case final epoch?) {
+      await emojis.markAnnounced(groupId, epoch);
+    }
+  }
+
+  /// Members who joined since an emoji changed learn the set on the next
+  /// epoch.
+  void _announceEmojisSoon() {
+    final g = groups;
+    if (g == null || _closed) return;
+    for (final space in g.spaces) {
+      final epoch = g.group(space.id)?.epoch;
+      if (epoch == null || emojis.entries(space.id).isEmpty) continue;
+      if (emojis.announcedOn(space.id, epoch)) continue;
+      unawaited(
+        emojis
+            .markAnnounced(space.id, epoch)
+            .then((_) => _announceEmojis(space.id))
+            .catchError((Object e) => debugPrint('announce emojis: $e')),
+      );
     }
   }
 
@@ -869,6 +985,7 @@ class Session extends ChangeNotifier {
     await expiries.wipe();
     await servers.wipe();
     await callLogs.wipe();
+    await emojis.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();

@@ -206,10 +206,18 @@ class Sfx extends StatelessWidget {
 
 /// Speech balloon with a tail toward the speaker.
 class SpeechBubble extends StatelessWidget {
-  const SpeechBubble({super.key, required this.text, required this.outgoing});
+  const SpeechBubble({
+    super.key,
+    required this.text,
+    required this.outgoing,
+    this.richText,
+  });
 
   final String text;
   final bool outgoing;
+
+  /// Replaces [text] when set, e.g. with custom emojis inline.
+  final InlineSpan Function(TextStyle? style)? richText;
 
   @override
   Widget build(BuildContext context) {
@@ -224,10 +232,15 @@ class SpeechBubble extends StatelessWidget {
           outgoing ? 26 : 16,
           12,
         ),
-        child: Text(
-          text,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: ink),
-        ),
+        child: switch (richText) {
+          final rich? => Text.rich(
+            rich(Theme.of(context).textTheme.bodyLarge?.copyWith(color: ink)),
+          ),
+          null => Text(
+            text,
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: ink),
+          ),
+        },
       ),
     );
   }

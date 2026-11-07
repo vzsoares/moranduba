@@ -8,6 +8,7 @@ import '../core/session.dart';
 import 'attachments.dart';
 import 'chat_page.dart';
 import 'composer.dart';
+import 'emoji.dart';
 import 'manga.dart';
 
 /// A group's messages and composer; the chat page and the call page share it.
@@ -38,6 +39,11 @@ class GroupConversation extends StatelessWidget {
         Composer(
           onSend: (text) => session.sendToGroup(groupId, text),
           onAttach: _sendAttachment,
+          customEmojis: (insert) => GroupEmojiGrid(
+            session: session,
+            groupId: groupId,
+            onInsert: insert,
+          ),
         ),
       ],
     ),
@@ -80,6 +86,7 @@ class _Messages extends StatelessWidget {
     }
     final me = session.identity.publicKey;
     final groups = session.groups!;
+    final emoji = groupEmojis(session, groupId);
     return ListView.builder(
       reverse: true,
       padding: padding,
@@ -95,6 +102,7 @@ class _Messages extends StatelessWidget {
             previous is GroupMessage && previous.sender == m.sender;
         return MessageRow(
           text: m.text,
+          richText: (style) => emojiSpan(m.text, style, emoji),
           outgoing: outgoing,
           speaker: outgoing || followsSame
               ? null

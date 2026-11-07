@@ -119,12 +119,14 @@ class MessageRow extends StatelessWidget {
     required this.outgoing,
     this.speaker,
     this.attachments = const [],
+    this.richText,
   });
 
   final String text;
   final bool outgoing;
   final String? speaker;
   final List<Widget> attachments;
+  final InlineSpan Function(TextStyle? style)? richText;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -149,7 +151,12 @@ class MessageRow extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 6),
                   child: attachment,
                 ),
-              if (text.isNotEmpty) SpeechBubble(text: text, outgoing: outgoing),
+              if (text.isNotEmpty)
+                SpeechBubble(
+                  text: text,
+                  outgoing: outgoing,
+                  richText: richText,
+                ),
             ],
           ),
         ),
