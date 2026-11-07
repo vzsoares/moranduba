@@ -1,0 +1,8 @@
+# Local Nostr relay for development and the relay integration tests.
+services:
+  relay:
+    image: scsibug/nostr-rs-relay:latest
+    ports:
+      - "7777:8080"
+    tmpfs:
+      - /usr/src/app/db:mode=1777
