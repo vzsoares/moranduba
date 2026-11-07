@@ -3,9 +3,11 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:moranduba/core/calls/sfu_client.dart';
 import 'package:moranduba/core/expiry.dart';
 import 'package:moranduba/core/groups/blossom.dart';
 import 'package:moranduba/core/groups/groups.dart';
@@ -226,6 +228,42 @@ void main() {
     await bob.pruneExpired();
     expect(bobGroups.messagesIn(group.id), isEmpty);
   }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test(
+    'a desktop hosts calls: sidecar starts, gets claimed, lets members in',
+    () async {
+      final dataDir = await Directory.systemTemp.createTemp('sfu');
+      addTearDown(() => dataDir.delete(recursive: true));
+      final aliceId = Identity.generate();
+      final bobId = Identity.generate();
+      final alice = await _start(aliceId, MemorySnapshotStore());
+      final bob = await _start(bobId, MemorySnapshotStore());
+      addTearDown(alice.close);
+      addTearDown(bob.close);
+      final group = await alice.groups!.create('hosted', [bobId.publicKey]);
+      final bobGroups = bob.groups!;
+      await _until(bobGroups, () => bobGroups.invites.isNotEmpty);
+      await bobGroups.accept(bobGroups.invites.single.id);
+
+      await alice.hostCalls(group.id, dataDir: dataDir.path);
+      final sfu = alice.hosting!.identity.pubkey;
+      expect(alice.ownsServer(sfu), isTrue);
+      expect((await alice.pingServer(sfu))['owner'], isTrue);
+      await _until(bob, () => bob.serverOf(group.id) == sfu);
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while ((await bob.pingServer(sfu))['allowed'] != true) {
+        if (DateTime.now().isAfter(deadline)) fail('bob never allowed');
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
+
+      await alice.stopHosting();
+      await expectLater(bob.pingServer(sfu), throwsA(isA<SfuException>()));
+    },
+    skip: Platform.environment['MORANDUBA_SFU_BIN'] == null
+        ? 'set MORANDUBA_SFU_BIN to the built sfu binary'
+        : false,
+    timeout: const Timeout(Duration(seconds: 90)),
+  );
 
   test('creating a group with someone who has no key package fails', () async {
     final alice = await _start(Identity.generate(), MemorySnapshotStore());

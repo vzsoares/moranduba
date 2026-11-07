@@ -42,6 +42,7 @@ Future<HostedSfu> startHostedSfu({
       'DATA_DIR': dataDir,
       'RELAYS': relays.join(','),
       'SFU_EXIT_ON_STDIN_EOF': '1',
+      'TURN_PORT': '0',
     },
   );
   final identity = Completer<HostIdentity>();
