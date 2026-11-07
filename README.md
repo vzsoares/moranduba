@@ -6,8 +6,10 @@ Private group chat with E2EE video calls and screen share, built on Nostr.
 No accounts. Calls run peer to peer, through a member's desktop, or through a
 self-hosted SFU, and can switch between them mid-call.
 
-Status: identity, friends, 1:1 chat and encrypted groups (MLS) work on
-Windows, Linux, macOS and the web. Plan: [docs/architecture.md](docs/architecture.md).
+Status: identity, friends, 1:1 chat, encrypted groups (MLS), attachments,
+profiles, disappearing messages, and encrypted calls (mesh, or through a
+Moranduba SFU in `sfu/`) work on the web; desktop builds share the same code.
+Plan: [docs/architecture.md](docs/architecture.md).
 
 ## Develop
 
@@ -52,6 +54,7 @@ flutter test                          # unit tests, engine through FFI
 flutter test --run-skipped -t relay   # end to end, needs the dev relay
 (cd rust && cargo test)               # engine
 ./tool/test_web_mls.sh                # engine as wasm, under Node
+./e2e/run.sh                          # encrypted call, two headless Chromes
 ```
 
 ## Deploy
