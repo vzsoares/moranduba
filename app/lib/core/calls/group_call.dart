@@ -180,6 +180,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
         _applyVideoCap();
         await _transport.participantSeen(from);
         await _transport.participantMedia(from, signal.media);
+        _fallBackIfSplit(signal.mode);
       case SignalType.leave:
         await _transport.participantLeft(from);
       case SignalType.offer || SignalType.answer:
@@ -206,6 +207,19 @@ class GroupCall extends ChangeNotifier implements CallHost {
 
   bool get canSwitch => _resolve != null;
 
+  DateTime _lastSwitch = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Someone could not reach the server and called on mesh; mesh works for
+  /// everyone, so the whole call moves there. Heartbeats sent just before a
+  /// switch still carry the old mode, hence the grace period.
+  void _fallBackIfSplit(String? theirMode) {
+    if (theirMode != 'mesh' || _transport.mode == 'mesh') return;
+    if (switching || !canSwitch) return;
+    final since = DateTime.now().difference(_lastSwitch);
+    if (since < const Duration(seconds: 20)) return;
+    unawaited(switchMode('mesh'));
+  }
+
   /// Moves everyone in the call to [mode] (`mesh` or `server`).
   Future<void> switchMode(String mode) async {
     _switchSeq += 1;
@@ -227,6 +241,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
   Future<void> _applyMode(String mode) async {
     final resolve = _resolve;
     if (resolve == null || _closed || mode == _transport.mode) return;
+    _lastSwitch = DateTime.now();
     switching = true;
     switchProblem = null;
     _notify();
@@ -266,8 +281,14 @@ class GroupCall extends ChangeNotifier implements CallHost {
   Future<void> signal(CallSignal signal) =>
       _groups.sendSignal(groupId, signal.encode());
 
-  Future<void> _announce(SignalType type) =>
-      signal(CallSignal(type: type, callId: callId, media: localMedia));
+  Future<void> _announce(SignalType type) => signal(
+    CallSignal(
+      type: type,
+      callId: callId,
+      media: localMedia,
+      mode: _transport.mode,
+    ),
+  );
 
   @override
   void remoteStream(String participant, MediaStream stream) {

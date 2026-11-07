@@ -154,7 +154,7 @@ class MeshTransport implements CallTransport {
 
   @override
   Future<void> replaceVideo(MediaStreamTrack? track) async {
-    for (final pc in _links.values) {
+    for (final pc in [..._links.values]) {
       for (final transceiver in await pc.getTransceivers()) {
         final sender = transceiver.sender;
         final kind = sender.track?.kind ?? transceiver.receiver.track?.kind;
@@ -170,7 +170,9 @@ class MeshTransport implements CallTransport {
 
   @override
   Future<Map<String, LinkStats>> stats() async => {
-    for (final entry in _links.entries) entry.key: await linkStats(entry.value),
+    // Links can close while stats are awaited.
+    for (final MapEntry(:key, :value) in Map.of(_links).entries)
+      key: await linkStats(value),
   };
 
   @override
