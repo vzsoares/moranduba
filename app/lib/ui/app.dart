@@ -2,19 +2,35 @@ import 'package:flutter/material.dart';
 
 import 'app_controller.dart';
 import 'home_page.dart';
+import 'incoming_call.dart';
 import 'manga.dart';
 import 'onboarding_page.dart';
 import 'theme.dart';
 
-class MorandubaApp extends StatelessWidget {
+class MorandubaApp extends StatefulWidget {
   const MorandubaApp({super.key, required this.controller});
 
   final AppController controller;
 
   @override
+  State<MorandubaApp> createState() => _MorandubaAppState();
+}
+
+class _MorandubaAppState extends State<MorandubaApp> {
+  final _navigator = GlobalKey<NavigatorState>();
+
+  AppController get controller => widget.controller;
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Moranduba',
+      navigatorKey: _navigator,
+      builder: (context, child) => IncomingCallLayer(
+        controller: controller,
+        navigator: _navigator,
+        child: child ?? const SizedBox.shrink(),
+      ),
       debugShowCheckedModeBanner: false,
       theme: mangaTheme(),
       themeMode: ThemeMode.light,

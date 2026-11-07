@@ -218,7 +218,13 @@ Future<void> _bob() async {
     'call running',
     () => session.calls!.inCall(groupId).contains(peer),
   );
+  final ringing = session.calls!.ringing;
+  if (ringing?.groupId != groupId || ringing?.caller != peer) {
+    throw StateError('no ring for the call: $ringing');
+  }
+  _log('ringing');
   final call = await session.calls!.join(groupId);
+  if (session.calls!.ringing != null) throw StateError('still ringing');
   await call.setCamera(true);
   await _connected(session, call, peer);
   _log('video from alice');

@@ -28,3 +28,11 @@ StreamSubscription<Notice> showNotices(Session session) =>
         platform.show(notice.title, notice.body, tag: notice.chat);
       }
     });
+
+/// Tells about a ringing call while the app is in the background; the
+/// chat's [tag] lets it replace that chat's message notification.
+void notifyRing(String title, String body, {required String tag}) {
+  if (platform.allowed && platform.inBackground) {
+    platform.show(title, body, tag: tag);
+  }
+}

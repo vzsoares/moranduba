@@ -17,6 +17,25 @@ import 'transport.dart';
 const _signalMaxAge = Duration(seconds: 60);
 const _presenceTimeout = Duration(seconds: 45);
 
+/// A join older than this no longer rings.
+const _ringWindow = Duration(seconds: 30);
+const _ringFor = Duration(seconds: 40);
+
+/// A call in another group that wants us in it.
+class IncomingCall {
+  const IncomingCall({
+    required this.groupId,
+    required this.callId,
+    required this.caller,
+  });
+
+  final String groupId;
+  final String callId;
+
+  /// Who joined first, as far as we saw.
+  final String caller;
+}
+
 class _Presence {
   _Presence(this.callId, this.mode, this.sfu);
 
@@ -95,6 +114,52 @@ class Calls extends ChangeNotifier {
   /// Why the last call fell back to mesh, for the UI.
   String? serverProblem;
 
+  /// The call ringing now; only while we are in none.
+  IncomingCall? ringing;
+
+  /// Calls that rang once already, so a later joiner does not ring again.
+  final Set<String> _rang = {};
+  Timer? _ringTimer;
+
+  /// Stops the ring; the call keeps going without us.
+  void decline() {
+    if (ringing == null) return;
+    _stopRinging();
+    notifyListeners();
+  }
+
+  void _stopRinging() {
+    _ringTimer?.cancel();
+    _ringTimer = null;
+    ringing = null;
+  }
+
+  void _ringIfNew(GroupSignal signal, CallSignal decoded, Duration age) {
+    if (active != null || age > _ringWindow) return;
+    if (!_rang.add(decoded.callId)) return;
+    _ringTimer?.cancel();
+    ringing = IncomingCall(
+      groupId: signal.groupId,
+      callId: decoded.callId,
+      caller: signal.sender,
+    );
+    _ringTimer = Timer(_ringFor, () {
+      _stopRinging();
+      notifyListeners();
+    });
+  }
+
+  /// Ends the ring once everyone in that call has left.
+  void _stopRingingIfOver(String groupId) {
+    final ring = ringing;
+    if (ring == null || ring.groupId != groupId) return;
+    final cutoff = DateTime.now().subtract(_presenceTimeout);
+    final live = (_presence[groupId] ?? const {}).values.any(
+      (p) => p.callId == ring.callId && p.lastSeen.isAfter(cutoff),
+    );
+    if (!live) _stopRinging();
+  }
+
   /// Other members currently in a call in [groupId].
   List<String> inCall(String groupId) {
     final cutoff = DateTime.now().subtract(_presenceTimeout);
@@ -106,6 +171,7 @@ class Calls extends ChangeNotifier {
 
   /// Joins the call running in [groupId], or starts one.
   Future<GroupCall> join(String groupId) async {
+    _stopRinging();
     final current = active;
     if (current != null && !current.closed) {
       if (current.groupId == groupId) return current;
@@ -272,8 +338,12 @@ class Calls extends ChangeNotifier {
           decoded.mode,
           decoded.sfu,
         );
+        if (decoded.type == SignalType.join) {
+          _ringIfNew(signal, decoded, age);
+        }
       case SignalType.leave:
         group.remove(signal.sender);
+        _stopRingingIfOver(signal.groupId);
       case SignalType.switchMode:
         for (final p in group.values) {
           if (p.callId != decoded.callId) continue;
@@ -299,6 +369,7 @@ class Calls extends ChangeNotifier {
   }
 
   Future<void> close() async {
+    _stopRinging();
     await _subscription.cancel();
     await leave();
   }
