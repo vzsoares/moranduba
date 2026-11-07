@@ -134,6 +134,10 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// How to show [pubkey] in the UI.
+  String displayName(String pubkey) =>
+      pubkey == identity.publicKey ? 'You' : shortKey(pubkey);
+
   FriendState stateOf(String pubkey) => friendStateFrom(
     storedFriend: _storedFriends.contains(pubkey),
     controls: [

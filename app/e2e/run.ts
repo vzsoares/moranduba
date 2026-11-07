@@ -31,6 +31,13 @@ const results = roles.map(async (role, i) => {
       const text = message.text();
       if (text.startsWith("E2E")) console.log(text);
       else if (process.env.E2E_VERBOSE) console.log(`${role}:`, text.slice(0, 300));
+      const shot = text.match(/^E2E \w+ (video from \w+|sharing)$/);
+      if (shot && process.env.E2E_SHOTS) {
+        setTimeout(
+          () => page.screenshot({ path: `${process.env.E2E_SHOTS}/${role}-${shot[1].replace(/ /g, "-")}.png` }),
+          1500,
+        );
+      }
       if (text.startsWith(`E2E ${role} PASS`)) resolve(true);
       if (text.startsWith(`E2E ${role} FAIL`)) resolve(false);
     });

@@ -7,6 +7,7 @@ import '../core/groups/group_engine.dart';
 import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
+import 'call_page.dart';
 import 'chat_page.dart';
 import 'composer.dart';
 import 'manga.dart';
@@ -270,6 +271,11 @@ class GroupChatPage extends StatelessWidget {
             ),
             actions: [
               IconButton(
+                tooltip: 'Call',
+                icon: const Icon(Icons.videocam_outlined),
+                onPressed: () => openCall(context, session, groupId),
+              ),
+              IconButton(
                 tooltip: 'Members',
                 icon: const Icon(Icons.group_outlined),
                 onPressed: () => _showMembers(context, info),
@@ -288,6 +294,7 @@ class GroupChatPage extends StatelessWidget {
           ),
           body: Column(
             children: [
+              _CallBanner(session: session, groupId: groupId),
               Expanded(
                 child: _Messages(session: session, groupId: groupId),
               ),
@@ -369,6 +376,51 @@ String _mimeFor(String filename) =>
       'webp' => 'image/webp',
       _ => 'image/jpeg',
     };
+
+/// "N in a call" with a join button, while others are in this group's call.
+class _CallBanner extends StatelessWidget {
+  const _CallBanner({required this.session, required this.groupId});
+
+  final Session session;
+  final String groupId;
+
+  @override
+  Widget build(BuildContext context) {
+    final calls = session.calls;
+    if (calls == null) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: calls,
+      builder: (context, _) {
+        final inCall = calls.inCall(groupId);
+        final mine = calls.active?.groupId == groupId;
+        if (inCall.isEmpty || mine) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          child: Panel(
+            toned: true,
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.videocam),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '${inCall.length} in a call',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                FilledButton(
+                  onPressed: () => openCall(context, session, groupId),
+                  child: const Text('Join'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
 
 class _Messages extends StatelessWidget {
   const _Messages({required this.session, required this.groupId});

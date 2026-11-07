@@ -5,7 +5,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:moranduba/core/calls/group_call.dart';
 import 'package:moranduba/core/groups/group_engine.dart';
@@ -15,6 +15,8 @@ import 'package:moranduba/core/groups/mls_platform.dart';
 import 'package:moranduba/core/groups/rust_group_engine.dart';
 import 'package:moranduba/core/identity.dart';
 import 'package:moranduba/core/session.dart';
+import 'package:moranduba/ui/call_page.dart';
+import 'package:moranduba/ui/theme.dart';
 
 const _relays = ['ws://localhost:7777'];
 
@@ -68,25 +70,17 @@ Future<Session> _session() {
   );
 }
 
-/// Chrome decodes remote video only while something renders it.
-void _show(GroupCall call) => runApp(
-  Directionality(
-    textDirection: TextDirection.ltr,
-    child: ListenableBuilder(
-      listenable: call,
-      builder: (context, _) => Row(
-        children: [
-          for (final p in call.participants.values)
-            if (p.renderer case final renderer?)
-              SizedBox(width: 320, height: 240, child: RTCVideoView(renderer)),
-        ],
-      ),
-    ),
+/// The real call page; Chrome decodes remote video only while it renders.
+void _show(Session session, GroupCall call) => runApp(
+  MaterialApp(
+    theme: mangaTheme(),
+    debugShowCheckedModeBanner: false,
+    home: CallPage(session: session, call: call),
   ),
 );
 
-Future<void> _connected(GroupCall call, String peer) async {
-  _show(call);
+Future<void> _connected(Session session, GroupCall call, String peer) async {
+  _show(session, call);
   try {
     await _until(
       'video from peer',
@@ -118,7 +112,7 @@ Future<void> _alice() async {
   });
   _log('group created');
   final call = await session.calls!.join(group!.id);
-  await _connected(call, peer);
+  await _connected(session, call, peer);
   _log('video from bob');
 
   await Future<void>.delayed(const Duration(seconds: 3));
@@ -155,7 +149,7 @@ Future<void> _bob() async {
     () => session.calls!.inCall(groupId).contains(peer),
   );
   final call = await session.calls!.join(groupId);
-  await _connected(call, peer);
+  await _connected(session, call, peer);
   _log('video from alice');
 
   var last = await _framesFrom(call, peer);
