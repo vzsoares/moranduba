@@ -159,11 +159,17 @@ sequenceDiagram
 
 ### Signaling
 
-- Bootstrap: SDP offer/answer and ICE candidates as gift-wrapped events
-  addressed to the peer or SFU npub, with an ephemeral outer kind so relays
-  don't store them (*provisional*: kind 21059).
-- After the first connection, renegotiation (new tracks, simulcast layer
-  changes) moves to a WebRTC DataChannel. Relays only see the bootstrap.
+- Between members (mesh offers and answers, `join`/`here`/`leave` presence,
+  `switch`): MLS application messages inside the group, inner kind 25050
+  (*provisional*). Relays see only group events; the key never leaves MLS.
+- To an SFU: gift wraps with ephemeral outer kind 21059, so relays forward
+  without storing them. Shapes in [ADR 0002](adr/0002-sfu-protocol.md).
+- After the first connection to an SFU, renegotiation moves to a WebRTC
+  DataChannel. Relays only see the bootstrap.
+- Offers carry every ICE candidate (no trickle).
+- Presence heartbeats carry the sender's mode. A member on `mesh` while
+  others use `server` (it could not reach the SFU) moves the call to `mesh`,
+  which works for everyone.
 
 ### NAT traversal
 
@@ -207,7 +213,7 @@ and media is DTLS-SRTP plus frame encryption.
 | macOS, Windows, Linux | Yes | `getDisplayMedia` via flutter_webrtc desktop capturer | Yes |
 | Android | Yes | MediaProjection + foreground service | No |
 | iOS | Yes | ReplayKit Broadcast Upload Extension (separate target) | No |
-| Web | Later | — | No |
+| Web | Yes | `getDisplayMedia` | No |
 
 ## Repo layout
 
@@ -222,14 +228,18 @@ moranduba/
 
 ## Phases
 
-| Phase | Scope | Estimate |
+| Phase | Scope | Status |
 |---|---|---|
-| 0. Foundations | Repo, identity, relay pool, NIP-17 DMs, friend requests, private friend list | ~1 week |
-| 1. Groups + chat | MDK integration, space/channel model, create, invite, leave, text, MIP-04 attachments | ~2 weeks + 2 days |
-| 2. Mesh calls | Gift-wrapped signaling, FrameCryptor + MLS call key, audio, video, screen share, auto video cap | ~2 weeks |
-| 3. SFU | Go SFU, claim + allowlist, simulcast, last-N, embedded TURN, Docker image | ~3 weeks |
-| 4. Host peer + switching | Desktop sidecar packaging, mode selection, make-before-break switch | ~2 weeks |
-| 5. Platform polish | iOS broadcast extension, Android foreground service, notifications | ~1 week+ |
+| 0. Foundations | Repo, identity, relay pool, NIP-17 DMs, friend requests, private friend list | Done |
+| 1. Groups + chat | MDK integration, space/channel model, create, invite, leave, text, MIP-04 attachments | Done |
+| 2. Mesh calls | FrameCryptor + MLS call key, audio, video, screen share, auto video cap | Done |
+| 3. SFU | Go SFU, claim + allowlist, simulcast, last-N, embedded TURN, Docker image | Done; image not published |
+| 4. Host peer + switching | Desktop sidecar packaging, mode selection, make-before-break switch | Done; sidecar untested inside real desktop bundles |
+| 5. Platform polish | iOS broadcast extension, Android foreground service, notifications | Not started (needs device builds) |
+
+Added along the way: profiles (name and picture, encrypted), disappearing
+messages (per-chat timer, NIP-40), attachments in DMs (NIP-17 kind 15),
+media viewer, landing page.
 
 ## Open questions
 
