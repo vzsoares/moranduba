@@ -45,6 +45,7 @@ class Groups extends ChangeNotifier {
   final BlossomClient _blossom;
   final Map<String, Future<Uint8List>> _media = {};
   final _signals = StreamController<GroupSignal>.broadcast();
+  final _incoming = StreamController<GroupMessage>.broadcast();
 
   List<GroupInfo> _groups = [];
   List<GroupInvite> _invites = [];
@@ -73,6 +74,9 @@ class Groups extends ChangeNotifier {
 
   List<GroupMessage> messagesIn(String groupId) =>
       List.unmodifiable(_messages[groupId] ?? const <GroupMessage>[]);
+
+  /// Chat messages from other members as they arrive, history included.
+  Stream<GroupMessage> get incoming => _incoming.stream;
 
   /// Call signals from other members, as they arrive.
   Stream<GroupSignal> get signals => _signals.stream;
@@ -245,6 +249,7 @@ class Groups extends ChangeNotifier {
     _closed = true;
     _refreshTimer?.cancel();
     await _signals.close();
+    await _incoming.close();
     await _events?.cancel();
     final id = _subscriptionId;
     if (id != null) await _ndk.requests.closeSubscription(id);
@@ -335,6 +340,7 @@ class Groups extends ChangeNotifier {
           if (signal.sender != me) _signals.add(signal);
         } else if (message != null) {
           _upsert(message);
+          if (message.sender != me) _incoming.add(message);
         } else if (commit != null && groupId != null) {
           final info = group(groupId);
           await _publish(_event(commit), info?.relays ?? relays);

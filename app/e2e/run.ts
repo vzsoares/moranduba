@@ -64,6 +64,22 @@ const results = roles.map(async (role, i) => {
       });
     }
   });
+  if (process.env.E2E_NOTIFY) {
+    await page.evaluateOnNewDocument(() => {
+      // @ts-ignore
+      window.morandubaNotified = [];
+      // @ts-ignore
+      window.Notification = class {
+        static permission = "granted";
+        static requestPermission = async () => "granted";
+        constructor(title: string, options?: { body?: string; tag?: string }) {
+          // @ts-ignore
+          window.morandubaNotified.push({ title, body: options?.body ?? "", tag: options?.tag ?? "" });
+        }
+      };
+      Object.defineProperty(document, "hidden", { get: () => true });
+    });
+  }
   if (process.env.E2E_NO_SCRIPT_TRANSFORM) {
     await page.evaluateOnNewDocument(() => {
       // @ts-ignore

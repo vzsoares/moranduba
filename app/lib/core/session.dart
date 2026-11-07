@@ -109,6 +109,10 @@ class Session extends ChangeNotifier {
   Timer? _allowTimer;
   Timer? _profileTimer;
   Timer? _pruneTimer;
+  final _notices = StreamController<Notice>.broadcast();
+
+  /// Messages before this are history replaying, not news.
+  final int _startedAt = _now() - 30;
   Groups? groups;
   Calls? calls;
   Object? groupsError;
@@ -162,6 +166,7 @@ class Session extends ChangeNotifier {
           final pubkey => pubkey,
         };
       started.signals.listen(_onGroupSignal);
+      started.incoming.listen(_onGroupMessage);
       started.addListener(_shareProfileSoon);
       started.addListener(_announceExpiriesSoon);
       started.addListener(_announceServersSoon);
@@ -189,6 +194,19 @@ class Session extends ChangeNotifier {
       return;
     }
     if (!_seen.add(message.id)) return;
+    if (!message.isOutgoing &&
+        message.createdAt >= _startedAt &&
+        Control.of(message.rumor) == null) {
+      _notices.add(
+        Notice(
+          chat: dmChat(message.peerPubKey),
+          title: displayName(message.peerPubKey),
+          body: message.fileMetadata == null
+              ? message.content
+              : 'Sent ${dmFileName(message)}',
+        ),
+      );
+    }
     switch (Control.of(message.rumor)) {
       case Control.profile when !message.isOutgoing:
         final profile = Profile.decode(message.content);
@@ -215,6 +233,23 @@ class Session extends ChangeNotifier {
       _shareProfileSoon();
     }
     notifyListeners();
+  }
+
+  /// New messages from others, for notifications.
+  Stream<Notice> get notices => _notices.stream;
+
+  void _onGroupMessage(GroupMessage message) {
+    if (message.createdAt < _startedAt || _closed) return;
+    final group = groups?.group(message.groupId)?.name ?? 'Group';
+    _notices.add(
+      Notice(
+        chat: groupChat(message.groupId),
+        title: '${displayName(message.sender)} · $group',
+        body: message.text.isNotEmpty
+            ? message.text
+            : 'Sent ${message.media.firstOrNull?.filename ?? 'a file'}',
+      ),
+    );
   }
 
   Profile? get myProfile => profiles.of(identity.publicKey);
@@ -762,6 +797,7 @@ class Session extends ChangeNotifier {
     _profileTimer?.cancel();
     _pruneTimer?.cancel();
     _allowTimer?.cancel();
+    await _notices.close();
     await calls?.close();
     await sfuClient.close();
     await stopHosting();
@@ -783,4 +819,14 @@ String dmFileName(Nip17Message message) {
     if (tag case ['name', final String name] when name.isNotEmpty) return name;
   }
   return 'file';
+}
+
+/// A new message worth telling the user about.
+class Notice {
+  const Notice({required this.chat, required this.title, required this.body});
+
+  /// From [dmChat] or [groupChat].
+  final String chat;
+  final String title;
+  final String body;
 }

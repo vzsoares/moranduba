@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -8,6 +10,7 @@ import '../core/session.dart';
 import 'chat_page.dart';
 import 'groups_page.dart';
 import 'manga.dart';
+import 'notifications/notifications.dart';
 import 'people.dart';
 import 'profile_editor.dart';
 import 'theme.dart';
@@ -28,9 +31,17 @@ class _HomePageState extends State<HomePage>
     ..addListener(() => setState(() {}));
 
   Session get session => widget.session;
+  late final StreamSubscription<Notice> _notices;
+
+  @override
+  void initState() {
+    super.initState();
+    _notices = showNotices(session);
+  }
 
   @override
   void dispose() {
+    unawaited(_notices.cancel());
     _tabs.dispose();
     super.dispose();
   }
@@ -471,6 +482,10 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                 Text('YOUR PROFILE', style: text.headlineSmall),
                 const SizedBox(height: 12),
                 ProfileEditor(session: widget.session),
+                if (notificationsSupported) ...[
+                  const SizedBox(height: 12),
+                  const _NotificationsSwitch(),
+                ],
                 const SizedBox(height: 20),
                 Text('YOUR KEY', style: text.headlineSmall),
                 const SizedBox(height: 12),
@@ -567,4 +582,36 @@ class _IdentitySheetState extends State<_IdentitySheet> {
     Navigator.of(context).pop();
     await widget.onLogout();
   }
+}
+
+class _NotificationsSwitch extends StatefulWidget {
+  const _NotificationsSwitch();
+
+  @override
+  State<_NotificationsSwitch> createState() => _NotificationsSwitchState();
+}
+
+class _NotificationsSwitchState extends State<_NotificationsSwitch> {
+  bool _on = notificationsAllowed;
+
+  @override
+  Widget build(BuildContext context) => Panel(
+    padding: EdgeInsets.zero,
+    child: SwitchListTile(
+      title: const Text('Notify me about new messages'),
+      subtitle: Text(
+        _on
+            ? 'While this tab is in the background. Turn off in the '
+                  "browser's site settings."
+            : 'While this tab is in the background.',
+      ),
+      value: _on,
+      onChanged: _on
+          ? null
+          : (_) async {
+              final on = await askForNotifications();
+              if (mounted) setState(() => _on = on);
+            },
+    ),
+  );
 }
