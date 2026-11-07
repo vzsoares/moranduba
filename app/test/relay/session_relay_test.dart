@@ -18,6 +18,13 @@ import '../support/fake_blossom.dart';
 // Needs the dev relay: docker compose -f dev/docker-compose.yml up -d
 const _relays = ['ws://localhost:7777'];
 
+/// In-memory stores; sessions sharing one factory see each other's data,
+/// like a restart on the same device.
+Future<SnapshotStore> Function(String) _memory() {
+  final stores = <String, MemorySnapshotStore>{};
+  return (name) async => stores.putIfAbsent(name, MemorySnapshotStore.new);
+}
+
 Future<void> _until(Session session, bool Function() condition) async {
   if (condition()) return;
   final done = Completer<void>();
@@ -37,18 +44,16 @@ void main() {
   test('request, accept, chat, and friend list survives restart', () async {
     final aliceId = Identity.generate();
     final bobId = Identity.generate();
-    final aliceProfiles = MemorySnapshotStore();
+    final aliceStores = _memory();
     final alice = await Session.start(
       aliceId,
       relays: _relays,
-      profileStore: aliceProfiles,
-      expiryStore: MemorySnapshotStore(),
+      openStore: aliceStores,
     );
     final bob = await Session.start(
       bobId,
       relays: _relays,
-      profileStore: MemorySnapshotStore(),
-      expiryStore: MemorySnapshotStore(),
+      openStore: _memory(),
     );
     addTearDown(alice.close);
     addTearDown(bob.close);
@@ -75,8 +80,7 @@ void main() {
     final restarted = await Session.start(
       aliceId,
       relays: _relays,
-      profileStore: aliceProfiles,
-      expiryStore: MemorySnapshotStore(),
+      openStore: aliceStores,
     );
     addTearDown(restarted.close);
     expect(restarted.stateOf(bobId.publicKey), FriendState.friend);
@@ -91,16 +95,14 @@ void main() {
     final alice = await Session.start(
       aliceId,
       relays: _relays,
+      openStore: _memory(),
       blossom: blossom,
-      profileStore: MemorySnapshotStore(),
-      expiryStore: MemorySnapshotStore(),
     );
     final bob = await Session.start(
       bobId,
       relays: _relays,
+      openStore: _memory(),
       blossom: blossom,
-      profileStore: MemorySnapshotStore(),
-      expiryStore: MemorySnapshotStore(),
     );
     addTearDown(alice.close);
     addTearDown(bob.close);
@@ -138,14 +140,12 @@ void main() {
       final alice = await Session.start(
         aliceId,
         relays: _relays,
-        profileStore: MemorySnapshotStore(),
-        expiryStore: MemorySnapshotStore(),
+        openStore: _memory(),
       );
       final bob = await Session.start(
         bobId,
         relays: _relays,
-        profileStore: MemorySnapshotStore(),
-        expiryStore: MemorySnapshotStore(),
+        openStore: _memory(),
       );
       addTearDown(alice.close);
       addTearDown(bob.close);
@@ -193,9 +193,8 @@ void main() {
     Future<Session> start(Identity id) => Session.start(
       id,
       relays: _relays,
+      openStore: _memory(),
       blossom: blossom,
-      profileStore: MemorySnapshotStore(),
-      expiryStore: MemorySnapshotStore(),
     );
     final alice = await start(aliceId);
     final bob = await start(bobId);

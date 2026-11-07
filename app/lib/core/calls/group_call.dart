@@ -47,7 +47,15 @@ class GroupCall extends ChangeNotifier implements CallHost {
     await call._openMedia(video: video);
     await call._rekey();
     call._transport = (transport ?? MeshTransport.new)(call);
-    await call._transport.start();
+    try {
+      await call._transport.start();
+    } catch (e) {
+      if (call._transport.mode == 'mesh') rethrow;
+      debugPrint('${call._transport.mode} failed, using mesh: $e');
+      await call._transport.close();
+      call._transport = MeshTransport(call);
+      await call._transport.start();
+    }
     groups.addListener(call._onGroupChanged);
     call._ticker = Timer.periodic(_heartbeat, (_) => call._tick());
     await call._announce(SignalType.join);
@@ -149,6 +157,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
         }
         _applyVideoCap();
         await _transport.participantSeen(from);
+        await _transport.participantMedia(from, signal.media);
       case SignalType.leave:
         await _transport.participantLeft(from);
       case SignalType.offer || SignalType.answer:

@@ -34,6 +34,9 @@ class MeshTransport implements CallTransport {
   }
 
   @override
+  Future<void> participantMedia(String participant, MediaState media) async {}
+
+  @override
   Future<void> onSignal(String from, CallSignal signal) async {
     if (_closed || signal.to != _host.me) return;
     final sdp = signal.sdp;

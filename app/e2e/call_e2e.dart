@@ -1,5 +1,6 @@
 // Browser end-to-end check of encrypted calls. The runner (e2e/run.ts) opens
-// one page per participant: ?role=alice|bob&sk=<hex>&peer=<hex pubkey>.
+// one page per participant: ?role=alice|bob&sk=<hex>&peer=<hex pubkey>,
+// plus &sfu=<hex pubkey>&code=<claim code> to call through a Moranduba SFU.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
 import 'dart:math';
@@ -22,6 +23,8 @@ const _relays = ['ws://localhost:7777'];
 
 final _params = Uri.base.queryParameters;
 final _role = _params['role'] ?? 'alice';
+final _sfu = _params['sfu'];
+final _mode = _sfu == null ? 'mesh' : 'server';
 
 void _log(String line) => debugPrint('E2E $_role $line');
 
@@ -79,7 +82,24 @@ void _show(Session session, GroupCall call) => runApp(
   ),
 );
 
+/// Waits until the call server lets us in, so the call does not fall back
+/// to mesh.
+Future<void> _serverReady(Session session) async {
+  final sfu = _sfu;
+  if (sfu == null) return;
+  await _until('server allows us', () async {
+    try {
+      return (await session.pingServer(sfu))['allowed'] == true;
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
 Future<void> _connected(Session session, GroupCall call, String peer) async {
+  if (call.mode != _mode) {
+    throw StateError('call went ${call.mode}, wanted $_mode');
+  }
   _show(session, call);
   try {
     await _until(
@@ -111,6 +131,12 @@ Future<void> _alice() async {
     }
   });
   _log('group created');
+  if (_sfu case final sfu?) {
+    if (_params['code'] case final code?) await session.claimServer(sfu, code);
+    await session.setServer(group!.id, sfu);
+    await _serverReady(session);
+    _log('server set');
+  }
   final call = await session.calls!.join(group!.id);
   await _connected(session, call, peer);
   _log('video from bob');
@@ -144,6 +170,10 @@ Future<void> _bob() async {
   await _until('invite', () => groups.invites.isNotEmpty);
   await groups.accept(groups.invites.single.id);
   final groupId = groups.spaces.single.id;
+  if (_sfu case final sfu?) {
+    await _until('server choice', () => session.serverOf(groupId) == sfu);
+    await _serverReady(session);
+  }
   await _until(
     'call running',
     () => session.calls!.inCall(groupId).contains(peer),

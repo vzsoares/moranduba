@@ -32,6 +32,13 @@ Future<void> openCall(
   final navigator = Navigator.of(context);
   try {
     final call = await calls.join(groupId);
+    if (calls.serverProblem case final problem?) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Call server unavailable, calling directly. $problem'),
+        ),
+      );
+    }
     await navigator.push(
       MaterialPageRoute<void>(
         builder: (_) => CallPage(session: session, call: call),

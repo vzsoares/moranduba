@@ -33,6 +33,9 @@ abstract interface class CallTransport {
   /// A participant appeared (join or presence); mesh may need to dial them.
   Future<void> participantSeen(String participant);
 
+  /// What [participant] sends changed, such as a screen share starting.
+  Future<void> participantMedia(String participant, MediaState media);
+
   Future<void> participantLeft(String participant);
 
   /// Swaps the outgoing video track (camera, screen or none) on every link.

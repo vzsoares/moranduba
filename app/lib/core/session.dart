@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
 import 'calls/calls.dart';
+import 'calls/sfu_book.dart';
+import 'calls/sfu_client.dart';
 import 'expiry.dart';
 import 'friend_list.dart';
 import 'friend_protocol.dart';
@@ -28,6 +30,7 @@ class Session extends ChangeNotifier {
     this.profiles,
     this.expiries,
     this._blossom,
+    this.servers,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -37,8 +40,7 @@ class Session extends ChangeNotifier {
     List<String>? relays,
     Future<GroupEngine> Function()? openGroupEngine,
     BlossomClient? blossom,
-    SnapshotStore? profileStore,
-    SnapshotStore? expiryStore,
+    Future<SnapshotStore> Function(String name) openStore = openSnapshotStore,
   }) async {
     final files = blossom ?? BlossomClient();
     final relayList = relays ?? defaultRelays;
@@ -54,14 +56,14 @@ class Session extends ChangeNotifier {
       privkey: identity.privateKey,
     );
     final book = ProfileBook(
-      profileStore ?? await openSnapshotStore('${identity.publicKey}-profiles'),
+      await openStore('${identity.publicKey}-profiles'),
       files,
     );
     await book.load();
-    final timers = ExpiryBook(
-      expiryStore ?? await openSnapshotStore('${identity.publicKey}-expiry'),
-    );
+    final timers = ExpiryBook(await openStore('${identity.publicKey}-expiry'));
     await timers.load();
+    final sfus = SfuBook(await openStore('${identity.publicKey}-sfu'));
+    await sfus.load();
     final session = Session._(
       identity,
       ndk,
@@ -70,6 +72,7 @@ class Session extends ChangeNotifier {
       book,
       timers,
       files,
+      sfus,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -90,6 +93,16 @@ class Session extends ChangeNotifier {
   final ExpiryBook expiries;
   final BlossomClient _blossom;
   final Map<String, Future<Uint8List>> _dmFiles = {};
+  final SfuBook servers;
+  late final SfuClient sfuClient = SfuClient(
+    _ndk,
+    me: identity.publicKey,
+    relays: relays,
+  );
+
+  /// Allowlists last sent to the servers we own.
+  final Map<String, Set<String>> _allowSent = {};
+  Timer? _allowTimer;
   Timer? _profileTimer;
   Timer? _pruneTimer;
   Groups? groups;
@@ -139,10 +152,16 @@ class Session extends ChangeNotifier {
       );
       await started.start();
       groups = started;
-      calls = Calls(started);
+      calls = Calls(started, sfuClient: sfuClient)
+        ..serverFor = (groupId) => switch (servers.of(groupId).pubkey) {
+          '' => null,
+          final pubkey => pubkey,
+        };
       started.signals.listen(_onGroupSignal);
       started.addListener(_shareProfileSoon);
       started.addListener(_announceExpiriesSoon);
+      started.addListener(_announceServersSoon);
+      started.addListener(_syncAllowlistsSoon);
       // Welcomes that arrived before groups were up.
       for (final wrapped in _unhandledWraps) {
         await started.onGiftWrap(wrapped);
@@ -233,6 +252,19 @@ class Session extends ChangeNotifier {
             if (changed && !_closed) notifyListeners();
           }),
         );
+      case {'t': 'sfu', 'sfu': final Object? json}:
+        final sfu = PreferredSfu.fromJson(json);
+        if (sfu == null) return;
+        unawaited(
+          servers.put(signal.groupId, sfu).then((changed) async {
+            if (!changed) return;
+            if (groups?.group(signal.groupId)?.epoch case final epoch?) {
+              await servers.markAnnounced(signal.groupId, epoch);
+            }
+            _syncAllowlistsSoon();
+            if (!_closed) notifyListeners();
+          }),
+        );
       case {'t': 'expiry', 'timer': final Object? json}:
         final timer = ChatExpiry.fromJson(json);
         if (timer == null) return;
@@ -251,6 +283,101 @@ class Session extends ChangeNotifier {
   }
 
   ChatExpiry expiryOf(String chat) => expiries.of(chat);
+
+  /// The group's call server pubkey (hex), or null for mesh calls.
+  String? serverOf(String groupId) => switch (servers.of(groupId).pubkey) {
+    '' => null,
+    final pubkey => pubkey,
+  };
+
+  /// Whether [pubkey] is a call server we claimed.
+  bool ownsServer(String pubkey) => servers.owned.contains(pubkey);
+
+  /// Checks [sfu] answers; returns its `pong`.
+  Future<Map<String, Object?>> pingServer(String sfu) =>
+      sfuClient.request(sfu, {'type': 'ping'});
+
+  /// Becomes the owner of a fresh server with the code it printed.
+  Future<void> claimServer(String sfu, String code) async {
+    await sfuClient.request(sfu, {'type': 'claim', 'code': code.trim()});
+    await servers.own(sfu);
+    _syncAllowlistsSoon();
+  }
+
+  /// Sets [groupId]'s call server for everyone in it; null goes back to mesh.
+  Future<void> setServer(String groupId, String? sfu) async {
+    final previous = servers.of(groupId).setAt;
+    final now = _now();
+    final choice = PreferredSfu(
+      pubkey: sfu ?? '',
+      setAt: now > previous ? now : previous + 1,
+    );
+    await servers.put(groupId, choice);
+    notifyListeners();
+    await _announceServer(groupId, choice);
+    _syncAllowlistsSoon();
+  }
+
+  Future<void> _announceServer(String groupId, PreferredSfu choice) async {
+    final g = groups;
+    if (g == null) return;
+    await g.sendSignal(
+      groupId,
+      jsonEncode({'t': 'sfu', 'sfu': choice.toJson()}),
+    );
+    if (g.group(groupId)?.epoch case final epoch?) {
+      await servers.markAnnounced(groupId, epoch);
+    }
+  }
+
+  void _announceServersSoon() {
+    final g = groups;
+    if (g == null || _closed) return;
+    for (final space in g.spaces) {
+      final choice = servers.of(space.id);
+      final epoch = g.group(space.id)?.epoch;
+      if (choice.setAt == 0 || epoch == null) continue;
+      if (servers.announcedOn(space.id, epoch)) continue;
+      unawaited(
+        servers
+            .markAnnounced(space.id, epoch)
+            .then((_) => _announceServer(space.id, choice))
+            .catchError((Object e) => debugPrint('announce server: $e')),
+      );
+    }
+  }
+
+  /// Membership settles in bursts; one allowlist update per server after.
+  void _syncAllowlistsSoon() {
+    _allowTimer?.cancel();
+    _allowTimer = Timer(const Duration(seconds: 2), () {
+      unawaited(
+        _syncAllowlists().catchError((Object e) {
+          debugPrint('sync allowlists: $e');
+        }),
+      );
+    });
+  }
+
+  /// Keeps each owned server's allowlist equal to the members of the
+  /// groups that use it.
+  Future<void> _syncAllowlists() async {
+    final g = groups;
+    if (g == null || _closed) return;
+    for (final sfu in servers.owned) {
+      final members = <String>{identity.publicKey};
+      for (final groupId in servers.groupsOn(sfu)) {
+        if (g.group(groupId) == null) continue;
+        members.addAll(await g.members(groupId));
+      }
+      if (setEquals(_allowSent[sfu], members)) continue;
+      await sfuClient.request(sfu, {
+        'type': 'allow',
+        'pubkeys': [...members],
+      });
+      _allowSent[sfu] = members;
+    }
+  }
 
   /// Sets a chat's disappearing-message timer for everyone in it.
   /// [chat] comes from [dmChat] or [groupChat].
@@ -598,6 +725,7 @@ class Session extends ChangeNotifier {
   Future<void> wipe() async {
     await profiles.wipe();
     await expiries.wipe();
+    await servers.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
@@ -608,7 +736,9 @@ class Session extends ChangeNotifier {
     _closed = true;
     _profileTimer?.cancel();
     _pruneTimer?.cancel();
+    _allowTimer?.cancel();
     await calls?.close();
+    await sfuClient.close();
     await groups?.close();
     if (_saveTimer?.isActive ?? false) {
       _saveTimer!.cancel();

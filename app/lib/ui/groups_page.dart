@@ -16,6 +16,7 @@ import 'composer.dart';
 import 'expiry_button.dart';
 import 'manga.dart';
 import 'people.dart';
+import 'server_dialog.dart';
 import 'theme.dart';
 
 class GroupsTab extends StatelessWidget {
@@ -297,6 +298,14 @@ class GroupChatPage extends StatelessWidget {
               PopupMenuButton<void>(
                 tooltip: 'More',
                 itemBuilder: (_) => [
+                  PopupMenuItem(
+                    onTap: () => showDialog<void>(
+                      context: context,
+                      builder: (_) =>
+                          ServerDialog(session: session, groupId: groupId),
+                    ),
+                    child: const Text('Call server…'),
+                  ),
                   PopupMenuItem(
                     onTap: () => _confirmLeave(context, info),
                     child: const Text('Leave group'),

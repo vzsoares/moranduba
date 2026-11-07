@@ -7,6 +7,9 @@ import '../groups/group_engine.dart';
 import '../groups/groups.dart';
 import 'call_signal.dart';
 import 'group_call.dart';
+import 'mesh_transport.dart';
+import 'sfu_client.dart';
+import 'sfu_transport.dart';
 import 'transport.dart';
 
 /// Signals older than this are history replay, not a live call.
@@ -22,7 +25,7 @@ class _Presence {
 
 /// Who is in a call in each group, and the one call we are in.
 class Calls extends ChangeNotifier {
-  Calls(this._groups) {
+  Calls(this._groups, {this.sfuClient}) {
     _subscription = _groups.signals.listen(_onSignal);
   }
 
@@ -31,8 +34,16 @@ class Calls extends ChangeNotifier {
   final Map<String, Map<String, _Presence>> _presence = {};
   GroupCall? active;
 
-  /// Override for tests; mesh by default.
+  /// Override for tests; otherwise [serverFor] decides.
   CallTransport Function(CallHost host)? transportFactory;
+
+  final SfuClient? sfuClient;
+
+  /// The group's call server pubkey, or null for mesh.
+  String? Function(String groupId)? serverFor;
+
+  /// Why the last call fell back to mesh, for the UI.
+  String? serverProblem;
 
   /// Other members currently in a call in [groupId].
   List<String> inCall(String groupId) {
@@ -60,12 +71,36 @@ class Calls extends ChangeNotifier {
       groupId: groupId,
       callId: running ?? _newCallId(),
       video: video,
-      transport: transportFactory,
+      transport: transportFactory ?? await _chooseTransport(groupId),
     );
     active = call;
     call.addListener(notifyListeners);
     notifyListeners();
     return call;
+  }
+
+  /// `server` when the group's SFU answers a ping in time and knows us,
+  /// else mesh.
+  Future<CallTransport Function(CallHost host)> _chooseTransport(
+    String groupId,
+  ) async {
+    serverProblem = null;
+    final sfu = serverFor?.call(groupId);
+    final client = sfuClient;
+    if (sfu == null || client == null) return MeshTransport.new;
+    try {
+      final pong = await client.request(sfu, {'type': 'ping'});
+      if (pong['allowed'] != true) {
+        throw const SfuException('The call server does not know you yet');
+      }
+      final iceServers = iceServersFrom(pong);
+      return (CallHost host) =>
+          SfuTransport(host, client: client, sfu: sfu, iceServers: iceServers);
+    } catch (e) {
+      serverProblem = '$e';
+      debugPrint('call server $sfu: $e');
+      return MeshTransport.new;
+    }
   }
 
   Future<void> leave() async {

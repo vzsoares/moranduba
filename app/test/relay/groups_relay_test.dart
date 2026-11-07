@@ -43,8 +43,7 @@ Future<Session> _start(
   identity,
   relays: _relays,
   blossom: blossom,
-  profileStore: MemorySnapshotStore(),
-  expiryStore: MemorySnapshotStore(),
+  openStore: (_) async => MemorySnapshotStore(),
   openGroupEngine: () => RustGroupEngine.open(
     bridge: const NativeMlsBridge(),
     secretKey: identity.privateKey,
