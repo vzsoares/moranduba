@@ -1,6 +1,7 @@
 // Browser end-to-end check of encrypted calls. The runner (e2e/run.ts) opens
 // one page per participant: ?role=alice|bob&sk=<hex>&peer=<hex pubkey>,
-// plus &sfu=<hex pubkey>&code=<claim code> to call through a Moranduba SFU.
+// plus &sfu=<hex pubkey>&code=<claim code> to call through a Moranduba SFU,
+// and &switch=1 to move the call to mesh and back mid-call.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
 import 'dart:math';
@@ -141,6 +142,20 @@ Future<void> _alice() async {
   await _connected(session, call, peer);
   _log('video from bob');
 
+  if (_params['switch'] != null) {
+    for (final mode in ['mesh', 'server']) {
+      await call.switchMode(mode);
+      if (call.mode != mode) {
+        throw StateError('switch to $mode failed: ${call.switchProblem}');
+      }
+      await _until(
+        'video over $mode',
+        () async => await _framesFrom(call, peer) > 10,
+      );
+      _log('switched to $mode');
+    }
+  }
+
   await Future<void>.delayed(const Duration(seconds: 3));
   await call.shareScreen(
     await navigator.mediaDevices.getUserMedia({'video': true}),
@@ -187,8 +202,9 @@ Future<void> _bob() async {
   var flowed = 0;
   await _until('video freezes', () async {
     final now = await _framesFrom(call, peer);
-    if (now > last) {
-      flowed += now - last;
+    // A mode switch starts a new link, whose counter starts over.
+    if (now != last) {
+      flowed += now > last ? now - last : now;
       last = now;
       still = DateTime.now();
     }

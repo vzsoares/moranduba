@@ -69,12 +69,19 @@ class CallPage extends StatelessWidget {
             appBar: AppBar(
               title: Text(name.toUpperCase()),
               actions: [
-                _ModeBadge(mode: call.mode),
+                _ModeSwitch(
+                  call: call,
+                  hasServer: session.serverOf(call.groupId) != null,
+                ),
                 const SizedBox(width: 16),
               ],
             ),
             body: Column(
               children: [
+                if (call.switching)
+                  const _Notice('Switching how the call travels…'),
+                if (call.switchProblem case final problem?)
+                  _Notice('Could not switch: $problem'),
                 if (call.videoCapped)
                   const _Notice(
                     'Big call: cameras pause on mesh. A server keeps them on.',
@@ -88,6 +95,37 @@ class CallPage extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+/// The mode badge; a menu to move the whole call to the other mode.
+class _ModeSwitch extends StatelessWidget {
+  const _ModeSwitch({required this.call, required this.hasServer});
+
+  final GroupCall call;
+  final bool hasServer;
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = _ModeBadge(mode: call.mode);
+    if (!call.canSwitch || call.switching) return badge;
+    final target = call.mode == 'mesh' ? 'server' : 'mesh';
+    if (target == 'server' && !hasServer) return badge;
+    return PopupMenuButton<String>(
+      tooltip: 'How the call travels',
+      onSelected: (mode) => unawaited(call.switchMode(mode)),
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          value: target,
+          child: Text(
+            target == 'server'
+                ? 'Switch everyone to the call server'
+                : 'Switch everyone to direct (mesh)',
+          ),
+        ),
+      ],
+      child: badge,
     );
   }
 }

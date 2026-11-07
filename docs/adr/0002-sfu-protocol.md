@@ -100,9 +100,10 @@ or nothing into the video sender with `replaceTrack`.
 
 ### In the group
 
-A group's `preferred_sfu` (npub) travels as a group signal
-`{"t":"sfu","sfu":{"npub","set_at"}}`, newest `set_at` wins, announced again
-on new epochs like the disappearing-message timer. The owner's app keeps the
+A group's preferred SFU travels as a group signal
+`{"t":"sfu","sfu":{"pubkey":<hex or "">,"set_at":<unix>}}`, newest `set_at`
+wins, announced again on new epochs like the disappearing-message timer.
+An empty pubkey means mesh. The owner's app keeps the
 SFU allowlist equal to the members of every group that prefers that SFU.
 
 ## Consequences

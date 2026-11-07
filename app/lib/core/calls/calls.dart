@@ -72,6 +72,9 @@ class Calls extends ChangeNotifier {
       callId: running ?? _newCallId(),
       video: video,
       transport: transportFactory ?? await _chooseTransport(groupId),
+      resolve: transportFactory == null
+          ? (mode) => transportFor(groupId, mode)
+          : null,
     );
     active = call;
     call.addListener(notifyListeners);
@@ -85,22 +88,35 @@ class Calls extends ChangeNotifier {
     String groupId,
   ) async {
     serverProblem = null;
-    final sfu = serverFor?.call(groupId);
-    final client = sfuClient;
-    if (sfu == null || client == null) return MeshTransport.new;
+    if (serverFor?.call(groupId) == null) return MeshTransport.new;
     try {
-      final pong = await client.request(sfu, {'type': 'ping'});
-      if (pong['allowed'] != true) {
-        throw const SfuException('The call server does not know you yet');
-      }
-      final iceServers = iceServersFrom(pong);
-      return (CallHost host) =>
-          SfuTransport(host, client: client, sfu: sfu, iceServers: iceServers);
+      return await transportFor(groupId, 'server');
     } catch (e) {
       serverProblem = '$e';
-      debugPrint('call server $sfu: $e');
+      debugPrint('call server: $e');
       return MeshTransport.new;
     }
+  }
+
+  /// A transport for [mode] in [groupId]. Throws when `server` is not
+  /// reachable or does not know us.
+  Future<CallTransport Function(CallHost host)> transportFor(
+    String groupId,
+    String mode,
+  ) async {
+    if (mode != 'server') return MeshTransport.new;
+    final sfu = serverFor?.call(groupId);
+    final client = sfuClient;
+    if (sfu == null || client == null) {
+      throw const SfuException('This group has no call server');
+    }
+    final pong = await client.request(sfu, {'type': 'ping'});
+    if (pong['allowed'] != true) {
+      throw const SfuException('The call server does not know you yet');
+    }
+    final iceServers = iceServersFrom(pong);
+    return (CallHost host) =>
+        SfuTransport(host, client: client, sfu: sfu, iceServers: iceServers);
   }
 
   Future<void> leave() async {

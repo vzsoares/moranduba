@@ -29,7 +29,13 @@ class CallParticipant {
 /// One call in one group: local media, the MLS-derived key, presence, and
 /// the transport that carries the media.
 class GroupCall extends ChangeNotifier implements CallHost {
-  GroupCall._(this._groups, this.groupId, this.callId, this.crypto);
+  GroupCall._(
+    this._groups,
+    this.groupId,
+    this.callId,
+    this.crypto,
+    this._resolve,
+  );
 
   static Future<GroupCall> start({
     required Groups groups,
@@ -37,12 +43,15 @@ class GroupCall extends ChangeNotifier implements CallHost {
     required String callId,
     bool video = true,
     CallTransport Function(CallHost host)? transport,
+    Future<CallTransport Function(CallHost host)> Function(String mode)?
+    resolve,
   }) async {
     final call = GroupCall._(
       groups,
       groupId,
       callId,
       await CallCrypto.create(),
+      resolve,
     );
     await call._openMedia(video: video);
     await call._rekey();
@@ -69,6 +78,19 @@ class GroupCall extends ChangeNotifier implements CallHost {
   @override
   final CallCrypto crypto;
   late CallTransport _transport;
+
+  /// Builds transports for mode switches; null when switching is off.
+  final Future<CallTransport Function(CallHost host)> Function(String mode)?
+  _resolve;
+  int _switchSeq = 0;
+  String _switchFrom = '';
+
+  /// Mesh offers that arrived before our own switch to mesh.
+  final List<(String, CallSignal)> _earlyOffers = [];
+  bool switching = false;
+
+  /// Why the last switch failed, for the UI.
+  String? switchProblem;
   Timer? _ticker;
   int _keyEpoch = -1;
   bool _closed = false;
@@ -163,11 +185,81 @@ class GroupCall extends ChangeNotifier implements CallHost {
       case SignalType.offer || SignalType.answer:
         participants.putIfAbsent(from, () => CallParticipant(from)).lastSeen =
             DateTime.now();
-        await _transport.onSignal(from, signal);
+        if (_transport.mode != 'mesh' && signal.to == me) {
+          _earlyOffers.add((from, signal));
+        } else {
+          await _transport.onSignal(from, signal);
+        }
       case SignalType.switchMode:
-        break;
+        final mode = signal.mode;
+        if (mode == null) break;
+        final newer =
+            signal.seq > _switchSeq ||
+            (signal.seq == _switchSeq && from.compareTo(_switchFrom) > 0);
+        if (!newer) break;
+        _switchSeq = signal.seq;
+        _switchFrom = from;
+        await _applyMode(mode);
     }
     _notify();
+  }
+
+  bool get canSwitch => _resolve != null;
+
+  /// Moves everyone in the call to [mode] (`mesh` or `server`).
+  Future<void> switchMode(String mode) async {
+    _switchSeq += 1;
+    _switchFrom = me;
+    await signal(
+      CallSignal(
+        type: SignalType.switchMode,
+        callId: callId,
+        mode: mode,
+        seq: _switchSeq,
+        media: localMedia,
+      ),
+    );
+    await _applyMode(mode);
+  }
+
+  /// Make before break: the new transport carries media before the old one
+  /// closes. Local tracks and keys stay as they are.
+  Future<void> _applyMode(String mode) async {
+    final resolve = _resolve;
+    if (resolve == null || _closed || mode == _transport.mode) return;
+    switching = true;
+    switchProblem = null;
+    _notify();
+    try {
+      final next = (await resolve(mode))(this);
+      try {
+        await next.start();
+      } catch (_) {
+        await next.close();
+        rethrow;
+      }
+      final old = _transport;
+      _transport = next;
+      for (final p in [...participants.values]) {
+        await next.participantSeen(p.pubkey);
+        await next.participantMedia(p.pubkey, p.media);
+      }
+      final early = [..._earlyOffers];
+      _earlyOffers.clear();
+      if (next.mode == 'mesh') {
+        for (final (from, offer) in early) {
+          await next.onSignal(from, offer);
+        }
+      }
+      await old.close();
+      _applyVideoCap();
+    } catch (e) {
+      switchProblem = '$e';
+      debugPrint('switch to $mode: $e');
+    } finally {
+      switching = false;
+      _notify();
+    }
   }
 
   @override
