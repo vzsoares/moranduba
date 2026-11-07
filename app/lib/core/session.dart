@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
 import 'calls/calls.dart';
+import 'calls/host_peer.dart';
 import 'calls/sfu_book.dart';
 import 'calls/sfu_client.dart';
 import 'expiry.dart';
@@ -99,6 +100,9 @@ class Session extends ChangeNotifier {
     me: identity.publicKey,
     relays: relays,
   );
+
+  /// The call server this desktop runs, while hosting.
+  HostedSfu? hosting;
 
   /// Allowlists last sent to the servers we own.
   final Map<String, Set<String>> _allowSent = {};
@@ -302,6 +306,27 @@ class Session extends ChangeNotifier {
     await sfuClient.request(sfu, {'type': 'claim', 'code': code.trim()});
     await servers.own(sfu);
     _syncAllowlistsSoon();
+  }
+
+  /// Runs the call server on this desktop (host peer) and makes it
+  /// [groupId]'s server. [dataDir] keeps its key across restarts.
+  Future<void> hostCalls(String groupId, {required String dataDir}) async {
+    final sfu = hosting ??= await startHostedSfu(
+      dataDir: dataDir,
+      relays: relays,
+    );
+    final identity = sfu.identity;
+    if (identity.claimCode.isNotEmpty && !ownsServer(identity.pubkey)) {
+      await claimServer(identity.pubkey, identity.claimCode);
+    }
+    await setServer(groupId, identity.pubkey);
+  }
+
+  Future<void> stopHosting() async {
+    final sfu = hosting;
+    hosting = null;
+    await sfu?.stop();
+    notifyListeners();
   }
 
   /// Sets [groupId]'s call server for everyone in it; null goes back to mesh.
@@ -739,6 +764,7 @@ class Session extends ChangeNotifier {
     _allowTimer?.cancel();
     await calls?.close();
     await sfuClient.close();
+    await stopHosting();
     await groups?.close();
     if (_saveTimer?.isActive ?? false) {
       _saveTimer!.cancel();

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:ndk/shared/nips/nip19/nip19.dart';
+import 'package:path_provider/path_provider.dart';
 
+import '../core/calls/host_peer.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
 import 'manga.dart';
@@ -74,6 +76,13 @@ class _ServerDialogState extends State<ServerDialog> {
     return 'Saved';
   }
 
+  Future<String> _host() async {
+    final support = await getApplicationSupportDirectory();
+    await session.hostCalls(widget.groupId, dataDir: '${support.path}/sfu');
+    if (mounted) Navigator.of(context).pop();
+    return 'Hosting';
+  }
+
   Future<String> _direct() async {
     await session.setServer(widget.groupId, null);
     if (mounted) Navigator.of(context).pop();
@@ -116,6 +125,18 @@ class _ServerDialogState extends State<ServerDialog> {
                 controller: _code,
                 monospace: true,
               ),
+              if (canHostCalls) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.computer, size: 18),
+                  label: Text(
+                    session.hosting == null
+                        ? 'Host calls on this computer'
+                        : 'Use the server this computer hosts',
+                  ),
+                  onPressed: _busy ? null : () => _run(_host),
+                ),
+              ],
               if (_status case final status?) ...[
                 const SizedBox(height: 12),
                 Text(status, style: text.bodyMedium),
