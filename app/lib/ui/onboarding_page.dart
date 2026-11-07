@@ -135,7 +135,14 @@ class _Hero extends StatelessWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('MORANDUBA', style: text.displayMedium),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Logo(size: 52),
+                              const SizedBox(width: 12),
+                              Text('MORANDUBA', style: text.displayMedium),
+                            ],
+                          ),
                           Text(
                             'stories told only to your circle',
                             style: text.titleSmall,

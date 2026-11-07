@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_secure_storage: ^11.2.0
+  flutter_svg: ^2.3.2
   ndk: ^0.10.1
 
 dev_dependencies:
@@ -17,9 +18,13 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   mocktail: ^1.0.5
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/brand/logo.svg
 
   fonts:
     - family: Bangers
@@ -33,3 +38,21 @@ flutter:
     - family: JetBrainsMono
       fonts:
         - asset: assets/fonts/JetBrainsMono-Variable.ttf
+
+flutter_launcher_icons:
+  image_path: assets/brand/icon.png
+  android: true
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: assets/brand/icon_foreground.png
+  adaptive_icon_foreground_inset: 0
+  adaptive_icon_monochrome: assets/brand/icon_foreground.png
+  ios: true
+  remove_alpha_ios: true
+  web:
+    generate: true
+    background_color: "#FFFFFF"
+    theme_color: "#000000"
+  macos:
+    generate: true
+  windows:
+    generate: true

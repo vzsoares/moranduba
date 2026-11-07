@@ -23,7 +23,10 @@ class HomePage extends StatelessWidget {
           length: 2,
           child: Scaffold(
             appBar: AppBar(
-              title: const Text('MORANDUBA'),
+              title: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [Logo(), SizedBox(width: 10), Text('MORANDUBA')],
+              ),
               actions: [
                 IconButton(
                   tooltip: 'My key',

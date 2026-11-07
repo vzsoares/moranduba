@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'theme.dart';
 
@@ -495,5 +496,22 @@ class Avatar extends StatelessWidget {
         child: Center(child: Icon(icon, size: 22)),
       ),
     ),
+  );
+}
+
+/// Brand mark: a listener-speaker in profile, inked in [color].
+class Logo extends StatelessWidget {
+  const Logo({super.key, this.size = 32, this.color = MangaColors.ink});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => SvgPicture.asset(
+    'assets/brand/logo.svg',
+    width: size,
+    height: size,
+    colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+    semanticsLabel: 'Moranduba',
   );
 }
