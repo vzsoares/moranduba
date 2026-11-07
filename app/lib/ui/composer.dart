@@ -82,14 +82,14 @@ class _ComposerState extends State<Composer> {
           children: [
             if (widget.onAttach case final attach?) ...[
               IconButton(
-                tooltip: 'Send a picture',
+                tooltip: 'Attach a file',
                 onPressed: _attaching ? null : () => _attach(attach),
                 icon: _attaching
                     ? const SizedBox.square(
                         dimension: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.image_outlined),
+                    : const Icon(Icons.attach_file),
               ),
               const SizedBox(width: 8),
             ],

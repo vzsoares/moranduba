@@ -369,3 +369,63 @@ fn signals_and_call_keys_agree() {
     );
     assert_ne!(a["secret"], other["secret"]);
 }
+
+#[test]
+fn any_file_round_trips() {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine as _;
+
+    let alice = Peer::new();
+    let bob = Peer::new();
+    let created = alice.call(
+        "create_group",
+        json!({ "name": "files", "relays": RELAYS, "key_packages": [bob.key_package()] }),
+    );
+    let group = created["group"]["id"].as_str().unwrap().to_string();
+    bob.join(&created["welcomes"][0]);
+
+    let cases: [(&str, &str, Vec<u8>); 3] = [
+        (
+            "doc.pdf",
+            "application/pdf",
+            b"%PDF-1.4\n1 0 obj<<>>endobj\n%%EOF".to_vec(),
+        ),
+        (
+            "notes.bin",
+            "application/octet-stream",
+            (0..=255u8).collect(),
+        ),
+        (
+            "clip.webm",
+            "video/webm",
+            vec![0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4],
+        ),
+    ];
+    for (name, mime, bytes) in cases {
+        let data = BASE64.encode(&bytes);
+        let encrypted = alice.call(
+            "encrypt_media",
+            json!({ "group_id": group, "data": data, "mime": mime, "filename": name }),
+        );
+        let event = alice.call(
+            "send_media",
+            json!({
+                "group_id": group,
+                "caption": "",
+                "url": format!("https://blossom.test/{name}"),
+                "upload": encrypted["upload"],
+            }),
+        );
+        let media = bob.call("receive", json!({ "event": event }))["message"]["media"][0].clone();
+        assert_eq!(media["mime"], json!(mime), "{name}");
+        let plain = bob.call(
+            "decrypt_media",
+            json!({ "group_id": group, "data": encrypted["encrypted"], "media": media }),
+        );
+        assert_eq!(
+            BASE64.decode(plain.as_str().unwrap()).unwrap(),
+            bytes,
+            "{name}"
+        );
+    }
+}

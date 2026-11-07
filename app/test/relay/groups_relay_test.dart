@@ -150,7 +150,7 @@ void main() {
     final png = base64.decode(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     );
-    await alice.groups!.sendImage(
+    await alice.groups!.sendFile(
       group.id,
       png,
       mime: 'image/png',

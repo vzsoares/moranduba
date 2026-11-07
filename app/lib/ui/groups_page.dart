@@ -1,6 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
+
+import '../core/groups/media_types.dart';
+
 import 'package:flutter/material.dart';
 
 import '../core/groups/group_engine.dart';
@@ -11,6 +14,7 @@ import 'call_page.dart';
 import 'chat_page.dart';
 import 'composer.dart';
 import 'manga.dart';
+import 'media_viewer.dart';
 import 'theme.dart';
 
 class GroupsTab extends StatelessWidget {
@@ -60,7 +64,7 @@ class GroupsTab extends StatelessWidget {
             line: last == null
                 ? members(info?.memberCount ?? 0)
                 : '${_speaker(session, last.sender)}: '
-                      '${last.text.isEmpty && last.media.isNotEmpty ? 'sent a picture' : last.text}',
+                      '${last.text.isEmpty && last.media.isNotEmpty ? 'sent ${last.media.first.filename}' : last.text}',
             trailing: const Icon(Icons.chevron_right),
             onTap: () => openGroup(context, session, space.id),
           ),
@@ -300,7 +304,7 @@ class GroupChatPage extends StatelessWidget {
               ),
               Composer(
                 onSend: (text) => groups.send(groupId, text),
-                onAttach: () => _sendPicture(groups),
+                onAttach: () => _sendAttachment(groups),
               ),
             ],
           ),
@@ -309,13 +313,13 @@ class GroupChatPage extends StatelessWidget {
     );
   }
 
-  Future<void> _sendPicture(Groups groups) async {
-    final file = await openFile(acceptedTypeGroups: [_images]);
+  Future<void> _sendAttachment(Groups groups) async {
+    final file = await openFile();
     if (file == null) return;
-    await groups.sendImage(
+    await groups.sendFile(
       groupId,
       await file.readAsBytes(),
-      mime: file.mimeType ?? _mimeFor(file.name),
+      mime: mimeForFilename(file.name),
       filename: file.name,
     );
   }
@@ -361,21 +365,6 @@ class GroupChatPage extends StatelessWidget {
     }
   }
 }
-
-const _images = XTypeGroup(
-  label: 'Pictures',
-  extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
-  mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-  uniformTypeIdentifiers: ['public.image'],
-);
-
-String _mimeFor(String filename) =>
-    switch (filename.split('.').last.toLowerCase()) {
-      'png' => 'image/png',
-      'gif' => 'image/gif',
-      'webp' => 'image/webp',
-      _ => 'image/jpeg',
-    };
 
 /// "N in a call" with a join button, while others are in this group's call.
 class _CallBanner extends StatelessWidget {
@@ -463,7 +452,9 @@ class _Messages extends StatelessWidget {
                   groups: groups,
                   groupId: groupId,
                   media: media,
-                ),
+                )
+              else
+                _FileChip(groups: groups, groupId: groupId, media: media),
           ],
         );
       },
@@ -471,7 +462,49 @@ class _Messages extends StatelessWidget {
   }
 }
 
-/// Fetches, decrypts and shows one picture; tap to retry a failure.
+/// A non-picture attachment; opens in the viewer.
+class _FileChip extends StatelessWidget {
+  const _FileChip({
+    required this.groups,
+    required this.groupId,
+    required this.media,
+  });
+
+  final Groups groups;
+  final String groupId;
+  final MediaRef media;
+
+  @override
+  Widget build(BuildContext context) {
+    final kind = mediaKind(media.mime);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: RowPanel(
+        icon: mediaIcon(kind),
+        title: Text(
+          media.filename,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        line: switch (kind) {
+          MediaKind.video => 'Video · tap to play',
+          MediaKind.audio => 'Audio · tap to play',
+          MediaKind.pdf => 'PDF · tap to open',
+          _ => 'File · tap to open',
+        },
+        onTap: () => showMediaViewer(
+          context,
+          groups: groups,
+          groupId: groupId,
+          media: media,
+        ),
+      ),
+    );
+  }
+}
+
+/// Fetches, decrypts and shows one picture; tap to open, or to retry a failure.
 class _EncryptedImage extends StatefulWidget {
   const _EncryptedImage({
     super.key,
@@ -518,7 +551,18 @@ class _EncryptedImageState extends State<_EncryptedImage> {
               future: _bytes,
               builder: (context, snapshot) {
                 if (snapshot.data case final bytes?) {
-                  return Image.memory(bytes, fit: BoxFit.cover);
+                  return GestureDetector(
+                    onTap: () => showMediaViewer(
+                      context,
+                      groups: widget.groups,
+                      groupId: widget.groupId,
+                      media: widget.media,
+                    ),
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.zoomIn,
+                      child: Image.memory(bytes, fit: BoxFit.cover),
+                    ),
+                  );
                 }
                 if (snapshot.hasError) {
                   return Material(

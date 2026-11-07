@@ -181,7 +181,7 @@ class Groups extends ChangeNotifier {
   }
 
   /// Encrypts on device, uploads the ciphertext, then sends the message.
-  Future<void> sendImage(
+  Future<void> sendFile(
     String groupId,
     Uint8List bytes, {
     required String mime,
