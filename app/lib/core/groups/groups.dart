@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
@@ -61,6 +62,13 @@ class Groups extends ChangeNotifier {
   Timer? _refreshTimer;
   bool _closed = false;
 
+  /// Why the last key package publish failed; null once one went out.
+  Object? keyPackageError;
+  Timer? _keyPackageRetry;
+  Duration _keyPackageBackoff = _firstKeyPackageRetry;
+  static const _firstKeyPackageRetry = Duration(seconds: 15);
+  static const _maxKeyPackageRetry = Duration(minutes: 10);
+
   /// MLS state must advance in event order, so engine calls are serialized.
   Future<void> _queue = Future.value();
 
@@ -105,7 +113,34 @@ class Groups extends ChangeNotifier {
 
   Future<void> start() async {
     await _serial(_refresh);
-    await publishKeyPackage();
+    await _publishKeyPackageOrRetry();
+  }
+
+  /// Without a key package nobody can invite us, but existing groups still
+  /// work, so a failed publish retries with backoff instead of throwing.
+  Future<void> _publishKeyPackageOrRetry() async {
+    _keyPackageRetry?.cancel();
+    try {
+      await publishKeyPackage();
+      keyPackageError = null;
+      _keyPackageBackoff = _firstKeyPackageRetry;
+    } catch (e) {
+      keyPackageError = e;
+      debugPrint('key package: $e');
+      if (!_closed) {
+        _keyPackageRetry = Timer(
+          _keyPackageBackoff,
+          () => unawaited(_publishKeyPackageOrRetry()),
+        );
+        _keyPackageBackoff = Duration(
+          seconds: min(
+            _keyPackageBackoff.inSeconds * 2,
+            _maxKeyPackageRetry.inSeconds,
+          ),
+        );
+      }
+    }
+    _notify();
   }
 
   Future<void> publishKeyPackage() async {
@@ -172,7 +207,7 @@ class Groups extends ChangeNotifier {
       await _refresh();
     });
     // Joining consumed the key package the inviter used.
-    await publishKeyPackage();
+    await _publishKeyPackageOrRetry();
   }
 
   Future<void> decline(String inviteId) => _serial(() async {
@@ -259,6 +294,7 @@ class Groups extends ChangeNotifier {
     if (_closed) return;
     _closed = true;
     _refreshTimer?.cancel();
+    _keyPackageRetry?.cancel();
     await _signals.close();
     await _incoming.close();
     await _events?.cancel();
