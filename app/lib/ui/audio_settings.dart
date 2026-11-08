@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -121,7 +122,7 @@ class _AudioSettingsState extends State<_AudioSettings> {
                   onChanged: (id) => _set(_prefs.copyWith(input: () => id)),
                 ),
                 // Some browsers cannot pick a speaker; then the system's plays.
-                if (outputs.isNotEmpty) ...[
+                if (outputs.isNotEmpty || !kIsWeb) ...[
                   const SizedBox(height: 12),
                   _picker(
                     label: 'Speaker',
