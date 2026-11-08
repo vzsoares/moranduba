@@ -33,4 +33,22 @@ void main() {
     server.blobs[url.split('/').last] = Uint8List.fromList([9, 9, 9]);
     await expectLater(client.download(url), throwsA(isA<BlossomException>()));
   });
+
+  test(
+    'keeps two copies and fetches from the other when one is gone',
+    () async {
+      final mirror = await FakeBlossom.start();
+      addTearDown(mirror.close);
+      final client = BlossomClient(servers: [server.url, mirror.url]);
+      final data = Uint8List.fromList([4, 5, 6, 7]);
+      final hash = sha256.convert(data).toString();
+
+      final url = await client.upload(data);
+      expect(url, startsWith(server.url));
+      expect(mirror.blobs.keys, contains(hash));
+
+      server.blobs.clear();
+      expect(await client.download(url), data);
+    },
+  );
 }

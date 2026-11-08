@@ -40,48 +40,92 @@ class BlossomClient {
   final List<String> servers;
   final http.Client _client;
 
-  /// Returns the blob's URL from the first server that accepts it.
+  /// Servers that keep each blob, so losing one loses nothing.
+  static const copies = 2;
+
+  /// Puts the blob on [copies] servers, in parallel and in list order;
+  /// returns the URL from the first that took it.
   Future<String> upload(Uint8List data) async {
     final hash = sha256.convert(data).toString();
     final errors = <String>[];
-    for (final server in servers) {
-      try {
-        final response = await _client.put(
-          Uri.parse(server).resolve('/upload'),
-          headers: {
-            'Authorization': await _authorization(hash),
-            'Content-Type': 'application/octet-stream',
-          },
-          body: data,
-        );
-        if (response.statusCode >= 200 && response.statusCode < 300) {
-          if (jsonDecode(response.body) case {'url': final String url}) {
-            return url;
-          }
-          errors.add('$server: no url in reply');
-        } else {
-          final reason = response.headers['x-reason'];
-          errors.add(
-            '$server: HTTP ${response.statusCode}'
-            '${reason == null ? '' : ' ($reason)'}',
-          );
-        }
-      } catch (e) {
-        errors.add('$server: $e');
-      }
+    final urls = <String>[];
+    var next = 0;
+    while (urls.length < copies && next < servers.length) {
+      final batch = servers.skip(next).take(copies - urls.length).toList();
+      next += batch.length;
+      final placed = await Future.wait([
+        for (final server in batch) _put(server, data, hash, errors),
+      ]);
+      urls.addAll(placed.nonNulls);
     }
-    throw BlossomException('Upload failed. ${errors.join('; ')}');
+    if (urls.isEmpty) {
+      throw BlossomException('Upload failed. ${errors.join('; ')}');
+    }
+    return urls.first;
   }
 
-  /// Fetches a blob and checks it against the hash in its URL, when present.
+  Future<String?> _put(
+    String server,
+    Uint8List data,
+    String hash,
+    List<String> errors,
+  ) async {
+    try {
+      final response = await _client.put(
+        Uri.parse(server).resolve('/upload'),
+        headers: {
+          'Authorization': await _authorization(hash),
+          'Content-Type': 'application/octet-stream',
+        },
+        body: data,
+      );
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (jsonDecode(response.body) case {'url': final String url}) {
+          return url;
+        }
+        errors.add('$server: no url in reply');
+      } else {
+        final reason = response.headers['x-reason'];
+        errors.add(
+          '$server: HTTP ${response.statusCode}'
+          '${reason == null ? '' : ' ($reason)'}',
+        );
+      }
+    } catch (e) {
+      errors.add('$server: $e');
+    }
+    return null;
+  }
+
+  /// Fetches a blob and checks it against the hash in its URL. When that
+  /// server fails, asks the other servers for the same hash (BUD-01).
   Future<Uint8List> download(String url) async {
+    final hash = RegExp(r'[0-9a-f]{64}').firstMatch(url)?.group(0);
+    final candidates = [
+      url,
+      if (hash != null)
+        for (final server in servers)
+          if (!url.startsWith(server))
+            Uri.parse(server).resolve('/$hash').toString(),
+    ];
+    Object? first;
+    for (final candidate in candidates) {
+      try {
+        return await _get(candidate, hash);
+      } catch (e) {
+        first ??= e;
+      }
+    }
+    throw first ?? BlossomException('Nothing to fetch for $url');
+  }
+
+  Future<Uint8List> _get(String url, String? hash) async {
     final response = await _client.get(Uri.parse(url));
     if (response.statusCode != 200) {
       throw BlossomException('HTTP ${response.statusCode} for $url');
     }
     final bytes = response.bodyBytes;
-    final expected = RegExp(r'[0-9a-f]{64}').firstMatch(url)?.group(0);
-    if (expected != null && sha256.convert(bytes).toString() != expected) {
+    if (hash != null && sha256.convert(bytes).toString() != hash) {
       throw BlossomException('Blob does not match its hash: $url');
     }
     return bytes;
