@@ -10,6 +10,7 @@ use mdk_memory_storage::{MdkMemoryStorage, MemoryStorageSnapshot};
 use mdk_storage_traits::groups::types::{Group, GroupState};
 use mdk_storage_traits::groups::GroupStorage;
 use mdk_storage_traits::messages::types::Message;
+use mdk_storage_traits::messages::MessageStorage;
 use mdk_storage_traits::GroupId;
 use nostr::{
     Event, EventBuilder, EventId, JsonUtil, Keys, Kind, PublicKey, RelayUrl, TagKind, Timestamp,
@@ -140,6 +141,7 @@ impl Engine {
             "encrypt_text" => self.encrypt_text(args),
             "receive" => self.receive(args),
             "merge" => self.merge(args),
+            "retryable" => self.retryable(args),
             "messages" => self.messages(args),
             "leave" => self.leave(args),
             "encrypt_media" => self.encrypt_media(args),
@@ -393,6 +395,23 @@ impl Engine {
             .merge_pending_commit(&group_id(&args)?)
             .map_err(err)?;
         Ok(Value::Null)
+    }
+
+    /// Events of the group that failed to decrypt, now let through again.
+    /// Relays may hand over a message before the commit that opens its
+    /// epoch; after a commit the app feeds these back to `receive`.
+    fn retryable(&self, args: Value) -> Result<Value> {
+        let gid = group_id(&args)?;
+        let ids = self
+            .storage()
+            .find_failed_messages_for_retry(&gid)
+            .map_err(err)?;
+        for id in &ids {
+            self.storage()
+                .mark_processed_message_retryable(id)
+                .map_err(err)?;
+        }
+        Ok(json!(ids.iter().map(|id| id.to_hex()).collect::<Vec<_>>()))
     }
 
     fn messages(&self, args: Value) -> Result<Value> {

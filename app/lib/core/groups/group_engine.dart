@@ -54,6 +54,10 @@ abstract interface class GroupEngine {
   /// Applies our own pending commit once relays have it.
   Future<void> merge(String groupId);
 
+  /// Ids of [groupId]'s events that failed to decrypt, cleared to be
+  /// received again; an event can arrive before the commit opening its epoch.
+  Future<List<String>> retryable(String groupId);
+
   /// Encrypts an attachment with the group's current media key (MIP-04).
   Future<EncryptedMedia> encryptMedia(
     String groupId,

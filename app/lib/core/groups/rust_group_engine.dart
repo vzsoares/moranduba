@@ -242,6 +242,16 @@ class RustGroupEngine implements GroupEngine {
   }
 
   @override
+  Future<List<String>> retryable(String groupId) async {
+    final reply = _call('retryable', {'group_id': groupId});
+    _saveSoon();
+    return switch (reply) {
+      final List<Object?> ids => ids.whereType<String>().toList(),
+      _ => throw FormatException('retryable: $reply'),
+    };
+  }
+
+  @override
   Future<void> merge(String groupId) async {
     _call('merge', {'group_id': groupId});
     await _saveNow();

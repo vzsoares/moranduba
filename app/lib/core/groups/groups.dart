@@ -54,6 +54,10 @@ class Groups extends ChangeNotifier {
   String? _subscriptionId;
   Set<String> _subscribed = {};
   final Set<String> _seenEvents = {};
+
+  /// Events that did not decrypt, by id, in arrival order.
+  final Map<String, Nip01Event> _failed = {};
+  static const _maxFailed = 256;
   Timer? _refreshTimer;
   bool _closed = false;
 
@@ -335,32 +339,45 @@ class Groups extends ChangeNotifier {
 
   void _onGroupEvent(Nip01Event event) {
     if (!_seenEvents.add(event.id)) return;
-    final json = _json(event);
-    unawaited(
-      _serial(() async {
-        final receipt = await _engine.receive(json);
-        final groupId = receipt.groupId;
-        final message = receipt.message;
-        final commit = receipt.publish;
-        final signal = receipt.signal;
-        if (signal != null) {
-          if (signal.sender != me) _signals.add(signal);
-        } else if (message != null) {
-          _upsert(message);
-          if (message.sender != me) _incoming.add(message);
-        } else if (commit != null && groupId != null) {
-          final info = group(groupId);
-          await _publish(_event(commit), info?.relays ?? relays);
-          await _engine.merge(groupId);
-          _refreshSoon();
-        } else if (groupId != null) {
-          _refreshSoon();
-        }
-      }).catchError((Object e) {
-        // Our own events echo back, and replays repeat processed ones.
-        debugPrint('group event ${event.id}: $e');
-      }),
-    );
+    unawaited(_serial(() => _receive(event)));
+  }
+
+  Future<void> _receive(Nip01Event event) async {
+    try {
+      final receipt = await _engine.receive(_json(event));
+      final groupId = receipt.groupId;
+      final message = receipt.message;
+      final commit = receipt.publish;
+      final signal = receipt.signal;
+      if (signal != null) {
+        if (signal.sender != me) _signals.add(signal);
+      } else if (message != null) {
+        _upsert(message);
+        if (message.sender != me) _incoming.add(message);
+      } else if (commit != null && groupId != null) {
+        final info = group(groupId);
+        await _publish(_event(commit), info?.relays ?? relays);
+        await _engine.merge(groupId);
+        _refreshSoon();
+        await _retry(groupId);
+      } else if (groupId != null) {
+        _refreshSoon();
+        await _retry(groupId);
+      }
+    } catch (e) {
+      // Our own events echo back, and replays repeat processed ones.
+      debugPrint('group event ${event.id}: $e');
+      _failed[event.id] = event;
+      if (_failed.length > _maxFailed) _failed.remove(_failed.keys.first);
+    }
+  }
+
+  /// Feeds back events that came before the commit opening their epoch.
+  Future<void> _retry(String groupId) async {
+    if (_failed.isEmpty) return;
+    for (final id in await _engine.retryable(groupId)) {
+      if (_failed.remove(id) case final event?) await _receive(event);
+    }
   }
 
   void _upsert(GroupMessage message) {
@@ -372,29 +389,32 @@ class Groups extends ChangeNotifier {
     _notify();
   }
 
+  /// Each member's newest key package, in [members] order.
   Future<List<Nip01Event>> _keyPackages(List<String> members) async {
-    final packages = await Future.wait(members.map(_latestKeyPackage));
-    final missing = [
-      for (var i = 0; i < members.length; i++)
-        if (packages[i] == null) members[i],
-    ];
-    if (missing.isNotEmpty) throw MissingKeyPackage(missing);
-    return packages.nonNulls.toList();
-  }
-
-  Future<Nip01Event?> _latestKeyPackage(String pubkey) async {
+    // One request: concurrent queries to a relay sometimes never get EOSE.
     final events = await _ndk.requests
         .query(
           filter: Filter(
             kinds: [MarmotKind.keyPackage, MarmotKind.legacyKeyPackage],
-            authors: [pubkey],
+            authors: members,
           ),
           explicitRelays: relays,
           cacheRead: false,
         )
         .future;
-    if (events.isEmpty) return null;
-    return events.reduce((a, b) => a.createdAt >= b.createdAt ? a : b);
+    final newest = <String, Nip01Event>{};
+    for (final event in events) {
+      final known = newest[event.pubKey];
+      if (known == null || event.createdAt > known.createdAt) {
+        newest[event.pubKey] = event;
+      }
+    }
+    final missing = [
+      for (final m in members)
+        if (!newest.containsKey(m)) m,
+    ];
+    if (missing.isNotEmpty) throw MissingKeyPackage(missing);
+    return [for (final m in members) ?newest[m]];
   }
 
   Future<void> _sendWelcomes(

@@ -492,3 +492,74 @@ fn expiring_messages_carry_nip40_and_prune_for_good() {
     let got = alice.call("receive", json!({ "event": reply }));
     assert_eq!(got["message"]["text"], json!("still here"));
 }
+
+#[test]
+fn a_proposal_before_its_epoch_is_retried_after_the_commit() {
+    let alice = Peer::new();
+    let bob = Peer::new();
+    let carol = Peer::new();
+    let created = alice.call(
+        "create_group",
+        json!({
+            "name": "trio",
+            "relays": RELAYS,
+            "key_packages": [bob.key_package(), carol.key_package()],
+        }),
+    );
+    let group = created["group"]["id"].as_str().unwrap().to_string();
+    bob.join(&created["welcomes"][0]);
+    carol.join(&created["welcomes"][1]);
+
+    // A self-demote commit, then the leave proposal on the next epoch.
+    let events = bob.call("leave", json!({ "group_id": group }));
+    let [demote, proposal] = events.as_array().unwrap().as_slice() else {
+        panic!("expected demote and proposal, got {events}");
+    };
+    let early: Value = serde_json::from_str(&call(
+        carol.handle,
+        "receive",
+        &json!({ "event": proposal }).to_string(),
+    ))
+    .unwrap();
+    assert!(
+        early.get("err").is_some(),
+        "the proposal cannot decrypt before its epoch"
+    );
+    carol.call("receive", json!({ "event": demote }));
+
+    let proposal_id = Event::from_json(proposal.as_str().unwrap())
+        .unwrap()
+        .id
+        .to_hex();
+    assert_eq!(
+        carol.call("retryable", json!({ "group_id": group })),
+        json!([proposal_id])
+    );
+    let mut commits = Vec::new();
+    for (peer, order) in [(&carol, vec![proposal]), (&alice, vec![demote, proposal])] {
+        for event in order {
+            let receipt = peer.call("receive", json!({ "event": event }));
+            if let Some(commit) = receipt["publish"].as_str() {
+                peer.call("merge", json!({ "group_id": group }));
+                commits.push((peer, commit.to_string()));
+            }
+        }
+    }
+    let [(committer, commit)] = commits.as_slice() else {
+        panic!("expected one committer, got {}", commits.len());
+    };
+    let other = if committer.pubkey() == alice.pubkey() {
+        &carol
+    } else {
+        &alice
+    };
+    other.call("receive", json!({ "event": commit }));
+    for peer in [&alice, &carol] {
+        let members = peer.call("members", json!({ "group_id": group }));
+        assert_eq!(members.as_array().unwrap().len(), 2);
+    }
+    assert_eq!(
+        carol.call("retryable", json!({ "group_id": group })),
+        json!([])
+    );
+}
