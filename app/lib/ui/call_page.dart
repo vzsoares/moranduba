@@ -39,27 +39,68 @@ Future<void> openCall(
   if (calls == null) return;
   final messenger = ScaffoldMessenger.of(context);
   final navigator = Navigator.of(context);
+  final name = session.groups?.group(groupId)?.name ?? 'Call';
   // Counted from before the join, so the bar never flashes in between.
   callPageOpen.value += 1;
+  // The page shows at once; joining can take seconds (microphone, servers).
+  final joining = calls.join(groupId);
+  var showing = true;
+  unawaited(
+    joining.then(
+      (_) {
+        if (calls.serverProblem case final problem?) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                'No call server answered, calling directly. $problem',
+              ),
+            ),
+          );
+        }
+      },
+      onError: (Object e) {
+        if (showing) navigator.pop();
+        messenger.showSnackBar(SnackBar(content: Text('Could not join: $e')));
+      },
+    ),
+  );
   try {
-    final call = await calls.join(groupId);
-    if (calls.serverProblem case final problem?) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('No call server answered, calling directly. $problem'),
-        ),
-      );
-    }
     await navigator.push(
       MaterialPageRoute<void>(
-        builder: (_) => CallPage(session: session, call: call),
+        builder: (_) => FutureBuilder(
+          future: joining,
+          builder: (context, snapshot) => switch (snapshot.data) {
+            final call? => CallPage(session: session, call: call),
+            null => _Joining(name: name),
+          },
+        ),
       ),
     );
-  } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('Could not join: $e')));
   } finally {
+    showing = false;
     callPageOpen.value -= 1;
   }
+}
+
+class _Joining extends StatelessWidget {
+  const _Joining({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: Text(name.toUpperCase())),
+    body: const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text('Joining the call…'),
+        ],
+      ),
+    ),
+  );
 }
 
 class CallPage extends StatefulWidget {
