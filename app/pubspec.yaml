@@ -18,7 +18,8 @@ dependencies:
   flutter_local_notifications: ^23.0.0
   flutter_secure_storage: ^11.2.0
   flutter_svg: ^2.3.2
-  flutter_webrtc: ^1.6.3
+  flutter_webrtc:
+    path: third_party/flutter_webrtc
   fvp: ^0.40.0
   hooks: ^2.0.2
   http: ^1.6.0
