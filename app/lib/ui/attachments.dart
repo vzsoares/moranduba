@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 
 import '../core/groups/media_types.dart';
+import 'files/files.dart';
 import 'manga.dart';
 import 'media_viewer.dart';
 import 'theme.dart';
@@ -35,16 +38,24 @@ class Attachment {
   bool get isImage => mime.startsWith('image/');
 }
 
-/// A picture preview or a file chip; either opens the viewer.
+/// A picture or video preview, or a file chip; each opens the viewer.
 class AttachmentView extends StatelessWidget {
   const AttachmentView({super.key, required this.attachment});
 
   final Attachment attachment;
 
   @override
-  Widget build(BuildContext context) => attachment.isImage
-      ? _EncryptedImage(key: ValueKey(attachment.id), attachment: attachment)
-      : _FileChip(attachment: attachment);
+  Widget build(BuildContext context) => switch (mediaKind(attachment.mime)) {
+    MediaKind.image => _EncryptedImage(
+      key: ValueKey(attachment.id),
+      attachment: attachment,
+    ),
+    MediaKind.video => _VideoPreview(
+      key: ValueKey(attachment.id),
+      attachment: attachment,
+    ),
+    _ => _FileChip(attachment: attachment),
+  };
 }
 
 class _FileChip extends StatelessWidget {
@@ -97,7 +108,48 @@ class _EncryptedImageState extends State<_EncryptedImage> {
     final aspect = width != null && height != null && height > 0
         ? width / height
         : 4 / 3;
-    return ConstrainedBox(
+    return _framed(
+      aspect: aspect,
+      child: FutureBuilder(
+        future: _bytes,
+        builder: (context, snapshot) {
+          if (snapshot.data case final bytes?) {
+            return GestureDetector(
+              onTap: () => showMediaViewer(context, widget.attachment),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.zoomIn,
+                child: Image.memory(bytes, fit: BoxFit.cover),
+              ),
+            );
+          }
+          if (snapshot.hasError) {
+            return Material(
+              color: MangaColors.paper,
+              child: InkWell(
+                onTap: () => setState(() => _bytes = widget.attachment.load()),
+                child: const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.broken_image_outlined),
+                      SizedBox(height: 4),
+                      Text('Tap to retry'),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+          return const Screentone(child: SizedBox.expand());
+        },
+      ),
+    );
+  }
+}
+
+/// The same frame as a picture: bordered, rounded, at most 320 × 360.
+Widget _framed({required double aspect, required Widget child}) =>
+    ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 320, maxHeight: 360),
       child: AspectRatio(
         aspectRatio: aspect,
@@ -110,43 +162,153 @@ class _EncryptedImageState extends State<_EncryptedImage> {
             borderRadius: BorderRadius.circular(
               MangaShape.radius - MangaShape.stroke,
             ),
-            child: FutureBuilder(
-              future: _bytes,
-              builder: (context, snapshot) {
-                if (snapshot.data case final bytes?) {
-                  return GestureDetector(
-                    onTap: () => showMediaViewer(context, widget.attachment),
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.zoomIn,
-                      child: Image.memory(bytes, fit: BoxFit.cover),
-                    ),
-                  );
-                }
-                if (snapshot.hasError) {
-                  return Material(
+            child: child,
+          ),
+        ),
+      ),
+    );
+
+/// Fetches and decrypts a video, then shows its first frame, muted and
+/// paused, with its length; tap to play in the viewer. Falls back to the
+/// file chip when the platform cannot decode it.
+class _VideoPreview extends StatefulWidget {
+  const _VideoPreview({super.key, required this.attachment});
+
+  final Attachment attachment;
+
+  @override
+  State<_VideoPreview> createState() => _VideoPreviewState();
+}
+
+class _VideoPreviewState extends State<_VideoPreview> {
+  VideoPlayerController? _controller;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_open());
+  }
+
+  Future<void> _open() async {
+    try {
+      final media = widget.attachment;
+      final controller = await playable(
+        await media.load(),
+        media.mime,
+        media.filename,
+      );
+      if (!mounted) {
+        await disposePlayable(controller);
+        return;
+      }
+      await controller.initialize();
+      await controller.setVolume(0);
+      // Some decoders paint nothing until the first seek.
+      await controller.seekTo(const Duration(milliseconds: 1));
+      if (!mounted) {
+        await disposePlayable(controller);
+        return;
+      }
+      setState(() => _controller = controller);
+    } catch (e) {
+      debugPrint('video preview: $e');
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_controller case final controller?) {
+      unawaited(disposePlayable(controller));
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) return _FileChip(attachment: widget.attachment);
+    final controller = _controller;
+    final width = widget.attachment.width;
+    final height = widget.attachment.height;
+    final aspect = switch (controller) {
+      final c? when c.value.aspectRatio > 0 => c.value.aspectRatio,
+      _ when width != null && height != null && height > 0 => width / height,
+      _ => 16 / 9,
+    };
+    if (controller == null) {
+      return _framed(
+        aspect: aspect,
+        child: const Screentone(child: SizedBox.expand()),
+      );
+    }
+    return _framed(
+      aspect: aspect,
+      child: GestureDetector(
+        onTap: () => showMediaViewer(context, widget.attachment),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ColoredBox(
+                color: MangaColors.ink,
+                child: Center(
+                  child: AspectRatio(
+                    aspectRatio: aspect,
+                    child: VideoPlayer(controller),
+                  ),
+                ),
+              ),
+              const Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
                     color: MangaColors.paper,
-                    child: InkWell(
-                      onTap: () =>
-                          setState(() => _bytes = widget.attachment.load()),
-                      child: const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.broken_image_outlined),
-                            SizedBox(height: 4),
-                            Text('Tap to retry'),
-                          ],
-                        ),
+                    shape: BoxShape.circle,
+                    border: Border.fromBorderSide(
+                      BorderSide(width: MangaShape.stroke),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.all(10),
+                    child: Icon(Icons.play_arrow, size: 32),
+                  ),
+                ),
+              ),
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: MangaColors.ink,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    child: Text(
+                      _length(controller.value.duration),
+                      style: const TextStyle(
+                        color: MangaColors.paper,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                  );
-                }
-                return const Screentone(child: SizedBox.expand());
-              },
-            ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
+}
+
+String _length(Duration d) {
+  final minutes = d.inMinutes;
+  final seconds = (d.inSeconds % 60).toString().padLeft(2, '0');
+  return '$minutes:$seconds';
 }
