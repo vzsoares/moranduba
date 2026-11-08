@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,9 +44,16 @@ type identityLine struct {
 }
 
 func run() error {
-	cfg, err := config.FromEnv()
+	cfg, err := config.Load(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
 	if err != nil {
 		return err
+	}
+	if cfg.ShowVersion {
+		fmt.Println(version)
+		return nil
 	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err != nil {
@@ -135,8 +144,21 @@ func run() error {
 	} else if owner, err := nostr.PubKeyFromHex(store.Owner()); err == nil {
 		fmt.Printf("  owner:      %s\n", nip19.EncodeNpub(owner))
 	}
-	fmt.Printf("  relays:     %s (connected: %d)\n", strings.Join(cfg.Relays, ", "), len(relays.Connected()))
+	connected := len(relays.Connected())
+	fmt.Printf("  relays:     %s (connected: %d)\n", strings.Join(cfg.Relays, ", "), connected)
 	fmt.Printf("  ice host:   %s, turn udp/%d, media udp/%d-%d\n", iceHost, turnPort, cfg.UDPPortMin, cfg.UDPPortMax)
+	fmt.Printf("  data dir:   %s\n", cfg.DataDir)
+	if connected == 0 {
+		fmt.Println("  warning:    no relay answered yet; retrying. Check the URLs (-relays) and the network.")
+	}
+	if cfg.PublicIP == "" && net.ParseIP(iceHost).IsPrivate() {
+		fmt.Printf("  warning:    no public IP set, so only devices on this network can call through it.\n")
+		fmt.Printf("              Set -public-ip and forward UDP %d and %d-%d to this machine.\n", turnPort, cfg.UDPPortMin, cfg.UDPPortMax)
+	}
+	if code != "" {
+		fmt.Println("Next: in Moranduba, open a group, More > Call server…, paste the npub and the claim code.")
+		fmt.Println("The app must use one of the relays above (Profile > Relays and file servers).")
+	}
 	line, err := json.Marshal(identityLine{Pubkey: pk.Hex(), Npub: npub, ClaimCode: code, TURNPort: turnPort})
 	if err != nil {
 		return err

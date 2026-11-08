@@ -67,7 +67,8 @@ flutter test --run-skipped -t relay   # end to end, needs the dev relay
 (cd ../sfu && go test ./...)          # SFU
 ```
 
-Calls through a local SFU: run `DATA_DIR=./.data go run .` in `sfu/`, then
+Calls through a local SFU: run
+`go run . -relays ws://localhost:7777 -data-dir ./.data` in `sfu/`, then
 `E2E_QUERY='&sfu=<pubkey>&code=<claim code>&switch=1' ./e2e/run.sh` with the
 values from its `MORANDUBA_SFU` line (`&split=1` checks the mesh fallback).
 

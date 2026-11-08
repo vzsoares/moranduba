@@ -60,7 +60,10 @@ class SfuClient {
       await _send(sfu, {...message, 'id': id});
       final answer = await reply.future.timeout(
         timeout,
-        onTimeout: () => throw SfuException('No answer from the call server'),
+        onTimeout: () => throw SfuException(
+          'No answer from the call server. Check that it is running and '
+          'listens on one of your relays: ${relays.join(', ')}',
+        ),
       );
       if (answer case {'type': 'error', 'message': final String error}) {
         throw SfuException(error);
