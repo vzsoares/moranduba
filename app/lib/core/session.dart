@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
+import 'calls/audio_prefs.dart';
 import 'calls/call_log.dart';
 import 'calls/calls.dart';
 import 'calls/host_peer.dart';
@@ -44,6 +45,7 @@ class Session extends ChangeNotifier {
     this.gifs,
     this.dms,
     this.outbox,
+    this.audio,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -89,6 +91,10 @@ class Session extends ChangeNotifier {
     await dmArchive.load();
     final pending = Outbox(await openStore('${identity.publicKey}-outbox'));
     await pending.load();
+    final audioPrefs = AudioPrefsBook(
+      await openStore('${identity.publicKey}-audio'),
+    );
+    await audioPrefs.load();
     final session = Session._(
       identity,
       ndk,
@@ -103,6 +109,7 @@ class Session extends ChangeNotifier {
       gifBook,
       dmArchive,
       pending,
+      audioPrefs,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -132,6 +139,9 @@ class Session extends ChangeNotifier {
 
   /// Text that no relay took yet; sent again in order.
   final Outbox outbox;
+
+  /// Microphone, speaker and voice processing for calls.
+  final AudioPrefsBook audio;
   Timer? _outboxTimer;
   bool _flushing = false;
   final Map<String, Future<Uint8List>> _emojiImages = {};
@@ -217,7 +227,8 @@ class Session extends ChangeNotifier {
           _pushRing(groupId, event);
         }
         ..serverFor = serverOf
-        ..hostsFor = servers.hostsOf;
+        ..hostsFor = servers.hostsOf
+        ..audioPrefs = (() => audio.current);
       started.signals.listen(_onGroupSignal);
       started.incoming.listen(_onGroupMessage);
       started.addListener(_shareProfileSoon);
@@ -682,6 +693,13 @@ class Session extends ChangeNotifier {
             .catchError((Object e) => debugPrint('announce emojis: $e')),
       );
     }
+  }
+
+  /// Saves [prefs] and applies them to the call in progress.
+  Future<void> setAudio(AudioPrefs prefs) async {
+    await audio.put(prefs);
+    await calls?.active?.applyAudio(prefs);
+    notifyListeners();
   }
 
   /// Lets the SFUs of our groups ring this device while the app is closed.
@@ -1244,6 +1262,7 @@ class Session extends ChangeNotifier {
     await gifs.wipe();
     await dms.wipe();
     await outbox.wipe();
+    await audio.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();

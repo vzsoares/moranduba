@@ -162,6 +162,18 @@ class MeshTransport implements CallTransport {
   }
 
   @override
+  Future<void> replaceAudio(MediaStreamTrack track) async {
+    for (final pc in [..._links.values]) {
+      for (final transceiver in await pc.getTransceivers()) {
+        final sender = transceiver.sender;
+        if (sender.track?.kind == 'audio') {
+          await replaceTrackSettled(sender, track);
+        }
+      }
+    }
+  }
+
+  @override
   Future<void> replaceVideo(MediaStreamTrack? track) async {
     for (final pc in [..._links.values]) {
       for (final transceiver in await pc.getTransceivers()) {

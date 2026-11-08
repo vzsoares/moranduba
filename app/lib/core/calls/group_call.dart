@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../groups/groups.dart';
+import 'audio_prefs.dart';
 import 'call_crypto.dart';
 import 'call_signal.dart';
 import 'mesh_transport.dart';
@@ -42,6 +43,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     this.callId,
     this.crypto,
     this._resolve,
+    this.audio,
   );
 
   static Future<GroupCall> start({
@@ -54,6 +56,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
       String? sfu,
     )?
     resolve,
+    AudioPrefs audio = const AudioPrefs(),
   }) async {
     final call = GroupCall._(
       groups,
@@ -61,6 +64,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
       callId,
       await CallCrypto.create(),
       resolve,
+      audio,
     );
     await call._openMedia();
     await callServiceUpdate(sharing: false);
@@ -123,6 +127,9 @@ class GroupCall extends ChangeNotifier implements CallHost {
   MediaStream? _screen;
   bool micOn = true;
 
+  /// Microphone, speaker and voice processing in use.
+  AudioPrefs audio;
+
   /// Everyone silenced for us, our mic with it.
   bool deafened = false;
   bool _micBeforeDeafen = true;
@@ -153,7 +160,88 @@ class GroupCall extends ChangeNotifier implements CallHost {
   /// Calls start with the mic only; the camera is asked for on first use.
   Future<void> _openMedia() async {
     await localRenderer.initialize();
-    _local = await navigator.mediaDevices.getUserMedia({'audio': true});
+    _local = await _leveled(await _microphone(audio));
+  }
+
+  /// The mic through a gain stage when its level is not 100% and the
+  /// platform has one.
+  MicLevel? _micLevel;
+
+  Future<MediaStream> _leveled(MediaStream raw) async {
+    final previous = _micLevel;
+    _micLevel = audio.inputVolume == 1
+        ? null
+        : await levelMic(raw, audio.inputVolume);
+    await previous?.dispose();
+    return _micLevel?.stream ?? raw;
+  }
+
+  /// The microphone [prefs] ask for, or the default one when that device
+  /// is gone.
+  static Future<MediaStream> _microphone(AudioPrefs prefs) async {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        'audio': prefs.constraints(),
+      });
+    } catch (e) {
+      if (prefs.input == null) rethrow;
+      debugPrint('microphone ${prefs.input}: $e');
+      return navigator.mediaDevices.getUserMedia({
+        'audio': prefs.copyWith(input: () => null).constraints(),
+      });
+    }
+  }
+
+  Future<void> _audioChanges = Future.value();
+
+  /// Switches microphone, speaker, levels and voice processing mid-call,
+  /// one change at a time: a slider drag sends many.
+  Future<void> applyAudio(AudioPrefs prefs) =>
+      _audioChanges = _audioChanges.then((_) => _applyPrefs(prefs));
+
+  Future<void> _applyPrefs(AudioPrefs prefs) async {
+    final local = _local;
+    if (_closed || local == null) return;
+    final previous = audio;
+    audio = prefs;
+    if (prefs.output != previous.output) _applyOutput();
+    if (prefs.outputVolume != previous.outputVolume) {
+      for (final p in participants.values) {
+        await setPlaybackVolume(p.renderer, p.stream, _volumeOf(p));
+      }
+    }
+    final sameInput =
+        prefs.input == previous.input &&
+        prefs.echoCancellation == previous.echoCancellation &&
+        prefs.noiseSuppression == previous.noiseSuppression &&
+        prefs.autoGain == previous.autoGain;
+    final level = _micLevel;
+    // Only the level moved and a gain stage is in place: turn it.
+    if (sameInput && level != null && prefs.inputVolume != 1) {
+      level.gain = prefs.inputVolume;
+      return;
+    }
+    if (sameInput && prefs.inputVolume == previous.inputVolume) return;
+    final fresh = await _leveled(await _microphone(prefs));
+    final track = fresh.getAudioTracks().firstOrNull;
+    if (track == null) return;
+    track.enabled = micOn;
+    await _transport.replaceAudio(track);
+    for (final old in local.getAudioTracks()) {
+      await local.removeTrack(old);
+      await old.stop();
+    }
+    await local.addTrack(track);
+    _notify();
+  }
+
+  /// Plays everyone through the chosen speaker.
+  void _applyOutput() {
+    final output = audio.output;
+    if (output == null) return;
+    for (final p in participants.values) {
+      unawaited(p.renderer?.audioOutput(output));
+    }
   }
 
   /// Takes the key for the group's current epoch.
@@ -331,14 +419,19 @@ class GroupCall extends ChangeNotifier implements CallHost {
       unawaited(
         created.initialize().then((_) async {
           created.srcObject = stream;
-          if (p.volume != 1) await setPlaybackVolume(created, stream, p.volume);
+          if (audio.output case final output?) {
+            await created.audioOutput(output);
+          }
+          if (_volumeOf(p) != 1) {
+            await setPlaybackVolume(created, stream, _volumeOf(p));
+          }
           _notify();
         }),
       );
     } else {
       renderer.srcObject = stream;
-      if (p.volume != 1) {
-        unawaited(setPlaybackVolume(renderer, stream, p.volume));
+      if (_volumeOf(p) != 1) {
+        unawaited(setPlaybackVolume(renderer, stream, _volumeOf(p)));
       }
     }
     _notify();
@@ -355,6 +448,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
   @override
   void peerGone(String participant) {
     final p = participants.remove(participant);
+    releasePlayback(p?.renderer);
     unawaited(p?.renderer?.dispose());
     _notify();
   }
@@ -409,14 +503,16 @@ class GroupCall extends ChangeNotifier implements CallHost {
     _notify();
   }
 
-  /// How loud [pubkey] plays for us, 0 to 1.
+  /// How loud [pubkey] plays for us, 0 to 2, before the overall level.
   Future<void> setVolume(String pubkey, double volume) async {
     final p = participants[pubkey];
     if (p == null) return;
     p.volume = volume;
     _notify();
-    await setPlaybackVolume(p.renderer, p.stream, volume);
+    await setPlaybackVolume(p.renderer, p.stream, _volumeOf(p));
   }
+
+  double _volumeOf(CallParticipant p) => p.volume * audio.outputVolume;
 
   /// Stops showing [pubkey]'s camera or screen to us.
   void setVideoHidden(String pubkey, bool hidden) {
@@ -542,7 +638,9 @@ class GroupCall extends ChangeNotifier implements CallHost {
       }
       await stream.dispose();
     }
+    await _micLevel?.dispose();
     for (final p in participants.values) {
+      releasePlayback(p.renderer);
       await p.renderer?.dispose();
     }
     await localRenderer.dispose();

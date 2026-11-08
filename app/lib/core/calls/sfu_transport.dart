@@ -52,6 +52,7 @@ class SfuTransport implements CallTransport {
   RTCPeerConnection? _pc;
   RTCDataChannel? _channel;
   RTCRtpSender? _video;
+  final List<RTCRtpSender> _audio = [];
   bool _videoEncrypted = false;
   final Map<String, MediaStream> _streams = {};
   final Set<String> _pinned = {};
@@ -94,6 +95,7 @@ class SfuTransport implements CallTransport {
         ),
       );
       await _host.crypto.encrypt(transceiver.sender, _host.me);
+      _audio.add(transceiver.sender);
     }
     final camera = _host.outgoingTracks
         .where((t) => t.kind == 'video')
@@ -214,6 +216,13 @@ class SfuTransport implements CallTransport {
     _streams.remove(participant);
     if (_pinned.remove(participant)) _sendPins();
     _host.peerGone(participant);
+  }
+
+  @override
+  Future<void> replaceAudio(MediaStreamTrack track) async {
+    for (final sender in _audio) {
+      await replaceTrackSettled(sender, track);
+    }
   }
 
   @override

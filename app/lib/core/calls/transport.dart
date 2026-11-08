@@ -45,6 +45,9 @@ abstract interface class CallTransport {
   /// Swaps the outgoing video track (camera, screen or none) on every link.
   Future<void> replaceVideo(MediaStreamTrack? track);
 
+  /// Swaps the outgoing microphone track on every link.
+  Future<void> replaceAudio(MediaStreamTrack track);
+
   /// Per-participant link stats for UI and tests.
   Future<Map<String, LinkStats>> stats();
 

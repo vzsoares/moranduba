@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../core/calls/group_call.dart';
 import '../core/calls/screen_capture.dart';
 import '../core/session.dart';
+import 'audio_settings.dart';
 import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
@@ -144,6 +145,11 @@ class _CallPageState extends State<CallPage> {
               appBar: AppBar(
                 title: Text(name.toUpperCase()),
                 actions: [
+                  IconButton(
+                    tooltip: 'Audio settings',
+                    icon: const Icon(Icons.settings_voice_outlined),
+                    onPressed: () => showAudioSettings(context, session),
+                  ),
                   _ModeSwitch(
                     call: call,
                     modes: [
@@ -488,7 +494,8 @@ Future<void> _showPersonControls(
                     title: const Text('Volume'),
                     subtitle: Slider(
                       value: p.volume,
-                      divisions: 20,
+                      max: 2,
+                      divisions: 40,
                       label: '${(p.volume * 100).round()}%',
                       onChanged: p.mutedForMe
                           ? null

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../groups/group_engine.dart';
 import '../groups/groups.dart';
+import 'audio_prefs.dart';
 import 'call_log.dart';
 import 'call_signal.dart';
 import 'group_call.dart';
@@ -100,6 +101,9 @@ class Calls extends ChangeNotifier {
 
   /// The group's opted-in host peers, in order of preference.
   List<String> Function(String groupId)? hostsFor;
+
+  /// Microphone and speaker for new calls.
+  AudioPrefs Function()? audioPrefs;
 
   /// Pings an SFU; tests swap it to make one unreachable.
   late Future<Map<String, Object?>> Function(String sfu) ping = (sfu) =>
@@ -202,6 +206,7 @@ class Calls extends ChangeNotifier {
       resolve: transportFactory == null
           ? (mode, sfu) => transportFor(groupId, mode, sfu)
           : null,
+      audio: audioPrefs?.call() ?? const AudioPrefs(),
     );
     active = call;
     _startedActive = running == null;

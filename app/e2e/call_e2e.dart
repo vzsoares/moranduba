@@ -237,30 +237,52 @@ Future<void> _bob() async {
   await _connected(session, call, peer);
   _log('video from alice');
 
+  // Re-read each time: a mode switch brings a new stream.
+  List<MediaStreamTrack> heard() =>
+      call.participants[peer]?.stream?.getAudioTracks() ?? [];
   await call.setDeafened(true);
-  final heard = call.participants[peer]?.stream?.getAudioTracks() ?? [];
-  if (call.micOn || heard.isEmpty || heard.any((t) => t.enabled)) {
+  if (call.micOn || heard().isEmpty || heard().any((t) => t.enabled)) {
     throw StateError('deafen left audio on: mic ${call.micOn}');
   }
   await call.setDeafened(false);
-  if (!call.micOn || heard.any((t) => !t.enabled)) {
+  if (!call.micOn || heard().any((t) => !t.enabled)) {
     throw StateError('undeafen did not restore audio');
   }
   _log('deafen and back');
 
+  final before = call.outgoingTracks.firstWhere((t) => t.kind == 'audio').id;
+  await call.applyAudio(call.audio.copyWith(noiseSuppression: false));
+  final after = call.outgoingTracks.firstWhere((t) => t.kind == 'audio').id;
+  if (before == after) throw StateError('microphone was not reopened');
+  _log('audio settings applied');
+
   call.setMutedForMe(peer, true);
-  if (heard.any((t) => t.enabled)) throw StateError('mute for me left audio');
+  if (heard().any((t) => t.enabled)) {
+    throw StateError('mute for me left audio');
+  }
   call.setMutedForMe(peer, false);
   await call.setVolume(peer, .3);
   final id = call.participants[peer]?.renderer?.textureId;
   final element = web.document.getElementById('audio_RTCVideoRenderer-$id');
   final volume = element?.getProperty<JSNumber>('volume'.toJS).toDartDouble;
-  if (heard.any((t) => !t.enabled) ||
+  if (heard().any((t) => !t.enabled) ||
       volume == null ||
       (volume - .3).abs() > .01) {
     throw StateError('per-person audio not applied: volume $volume');
   }
   _log('per-person mute and volume');
+
+  await call.setVolume(peer, 1.5);
+  if (element?.getProperty<JSBoolean>('muted'.toJS).toDart != true) {
+    throw StateError('150% did not move playback to WebAudio');
+  }
+  await call.setVolume(peer, 1);
+  final plain = call.outgoingTracks.firstWhere((t) => t.kind == 'audio').id;
+  await call.applyAudio(call.audio.copyWith(inputVolume: 1.5));
+  final boosted = call.outgoingTracks.firstWhere((t) => t.kind == 'audio').id;
+  if (plain == boosted) throw StateError('mic level did not add a gain stage');
+  await call.applyAudio(call.audio.copyWith(inputVolume: 1.8));
+  _log('levels above 100%');
 
   var last = await _framesFrom(call, peer);
   var still = DateTime.now();

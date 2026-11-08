@@ -8,6 +8,7 @@ import '../core/groups/group_engine.dart';
 import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
+import 'audio_settings.dart';
 import 'chat_page.dart';
 import 'groups_page.dart';
 import 'manga.dart';
@@ -483,6 +484,12 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   const SizedBox(height: 12),
                   _NotificationsSwitch(session: widget.session),
                 ],
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.settings_voice_outlined, size: 18),
+                  label: const Text('Audio: microphone and speaker'),
+                  onPressed: () => showAudioSettings(context, widget.session),
+                ),
                 const SizedBox(height: 20),
                 Text('YOUR KEY', style: text.headlineSmall),
                 const SizedBox(height: 12),
