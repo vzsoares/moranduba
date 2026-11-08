@@ -69,6 +69,14 @@ class _ServerDialogState extends State<ServerDialog> {
   }
 
   Future<String> _save() async {
+    // No npub means no server; hosting on this computer applies on its own.
+    if (_npub.text.trim().isEmpty) {
+      if (session.serverOf(widget.groupId) != null) {
+        await session.setServer(widget.groupId, null);
+      }
+      if (mounted) Navigator.of(context).pop();
+      return 'Saved';
+    }
     final sfu = parsePublicKey(_npub.text);
     final code = _code.text.trim();
     if (code.isNotEmpty) await session.claimServer(sfu, code);
@@ -132,8 +140,10 @@ class _ServerDialogState extends State<ServerDialog> {
                 ),
               ],
               const SizedBox(height: 16),
+              Text('Server', style: text.titleSmall),
+              const SizedBox(height: 8),
               LabeledField(
-                label: 'Server npub',
+                label: 'Server npub (empty for none)',
                 hint: 'npub1… printed by the server',
                 controller: _npub,
                 monospace: true,
@@ -146,7 +156,17 @@ class _ServerDialogState extends State<ServerDialog> {
                 monospace: true,
               ),
               if (canHostCalls) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 20),
+                Text('This computer', style: text.titleSmall),
+                const SizedBox(height: 4),
+                Text(
+                  hostingHere
+                      ? 'Hosting calls for this group while the app is open.'
+                      : 'Members can call through this computer while the '
+                            'app is open. Starts right away, no need to save.',
+                  style: text.bodySmall,
+                ),
+                const SizedBox(height: 8),
                 OutlinedButton.icon(
                   icon: const Icon(Icons.computer, size: 18),
                   label: Text(
