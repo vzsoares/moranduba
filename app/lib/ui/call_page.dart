@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ndk/shared/nips/nip19/nip19.dart';
 
@@ -11,6 +12,7 @@ import '../core/calls/group_call.dart';
 import '../core/calls/screen_capture.dart';
 import '../core/session.dart';
 import 'audio_settings.dart';
+import 'fullscreen.dart';
 import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
@@ -130,10 +132,20 @@ class _CallPageState extends State<CallPage> {
   final _quality = ValueNotifier<Map<String, LinkQuality>>(const {});
   Timer? _qualityTimer;
 
-  /// Other group members; those not in the call get a tile to ring them.
+  /// The tile shown big for this viewer only: a pubkey, ours included.
+  final _highlight = ValueNotifier<String?>(null);
+
+  /// Other group members, listed in the people sheet to ring them.
   List<String> _members = const [];
   final Map<String, DateTime> _rungAt = {};
   Timer? _ringRefresh;
+
+  /// Bumped when members or rings change, for the people sheet.
+  final _people = ValueNotifier<int>(0);
+
+  void _peopleChanged() {
+    if (mounted) _people.value++;
+  }
 
   List<String> get _absent => [
     for (final m in _members)
@@ -147,37 +159,36 @@ class _CallPageState extends State<CallPage> {
     final members = await session.groups?.members(call.groupId);
     if (members == null || !mounted) return;
     final now = DateTime.now();
-    setState(() {
-      _members = [
-        for (final m in members)
-          if (m != session.identity.publicKey) m,
-      ];
-      // Starting a call rings everyone else.
-      if (started) {
-        for (final m in _members) {
-          _rungAt[m] = now;
-        }
+    _members = [
+      for (final m in members)
+        if (m != session.identity.publicKey) m,
+    ];
+    // Starting a call rings everyone else.
+    if (started) {
+      for (final m in _members) {
+        _rungAt[m] = now;
       }
-    });
-    if (started) _refreshWhenRingsEnd();
+      _refreshWhenRingsEnd();
+    }
+    _peopleChanged();
   }
 
   void _refreshWhenRingsEnd() {
     _ringRefresh?.cancel();
-    _ringRefresh = Timer(ringFor + const Duration(milliseconds: 200), () {
-      if (mounted) setState(() {});
-    });
+    _ringRefresh = Timer(
+      ringFor + const Duration(milliseconds: 200),
+      _peopleChanged,
+    );
   }
 
   /// Rings [pubkey], or everyone not in the call.
   Future<void> _ring([String? pubkey]) async {
     final messenger = ScaffoldMessenger.of(context);
     final now = DateTime.now();
-    setState(() {
-      for (final m in pubkey == null ? _absent : [pubkey]) {
-        _rungAt[m] = now;
-      }
-    });
+    for (final m in pubkey == null ? _absent : [pubkey]) {
+      _rungAt[m] = now;
+    }
+    _peopleChanged();
     _refreshWhenRingsEnd();
     try {
       await session.ring(call.groupId, pubkey: pubkey);
@@ -185,6 +196,20 @@ class _CallPageState extends State<CallPage> {
       messenger.showSnackBar(SnackBar(content: Text('Could not ring: $e')));
     }
   }
+
+  Future<void> _showPeople() => showPanelSheet<void>(
+    context,
+    builder: (_) => ListenableBuilder(
+      listenable: Listenable.merge([call, _people]),
+      builder: (context, _) => _PeopleSheet(
+        session: session,
+        call: call,
+        absent: _absent,
+        ringing: _ringing,
+        onRing: _ring,
+      ),
+    ),
+  );
 
   Future<void> _measureQuality() async {
     if (call.closed) return;
@@ -203,8 +228,11 @@ class _CallPageState extends State<CallPage> {
     Navigator.of(context).maybePop();
   }
 
-  /// The page closes once the call has ended; see [_closeWhenOver].
-  void _hangUp() => unawaited(session.calls?.leave());
+  /// Closes the page at once; the call ends in the background.
+  void _hangUp() {
+    unawaited(session.calls?.leave());
+    Navigator.of(context).maybePop();
+  }
 
   @override
   void initState() {
@@ -228,6 +256,8 @@ class _CallPageState extends State<CallPage> {
     _qualityTimer?.cancel();
     _ringRefresh?.cancel();
     _quality.dispose();
+    _highlight.dispose();
+    _people.dispose();
     super.dispose();
   }
 
@@ -266,15 +296,13 @@ class _CallPageState extends State<CallPage> {
                     'Big call: cameras pause on mesh. A server keeps them on.',
                   ),
                 Expanded(
-                  child: ValueListenableBuilder(
-                    valueListenable: _quality,
-                    builder: (context, quality, _) => _Tiles(
+                  child: ListenableBuilder(
+                    listenable: Listenable.merge([_quality, _highlight]),
+                    builder: (context, _) => _Tiles(
                       session: session,
                       call: call,
-                      quality: quality,
-                      absent: _absent,
-                      ringing: _ringing,
-                      onRing: _ring,
+                      quality: _quality.value,
+                      highlight: _highlight,
                     ),
                   ),
                 ),
@@ -286,9 +314,9 @@ class _CallPageState extends State<CallPage> {
                 title: Text(name.toUpperCase()),
                 actions: [
                   IconButton(
-                    tooltip: 'Ring everyone not here',
-                    icon: const Icon(Icons.ring_volume_outlined),
-                    onPressed: _absent.isEmpty ? null : () => _ring(),
+                    tooltip: 'People: ring the ones not here',
+                    icon: const Icon(Icons.group_outlined),
+                    onPressed: _showPeople,
                   ),
                   _QualityButton(session: session, quality: _quality),
                   IconButton(
@@ -624,64 +652,110 @@ class _Tiles extends StatelessWidget {
     required this.session,
     required this.call,
     required this.quality,
-    required this.absent,
-    required this.ringing,
-    required this.onRing,
+    required this.highlight,
   });
 
   final Session session;
   final GroupCall call;
   final Map<String, LinkQuality> quality;
+  final ValueNotifier<String?> highlight;
 
-  /// Group members not in the call.
-  final List<String> absent;
-  final bool Function(String pubkey) ringing;
-  final void Function(String pubkey) onRing;
+  void _toggle(String pubkey) =>
+      highlight.value = highlight.value == pubkey ? null : pubkey;
 
   @override
   Widget build(BuildContext context) {
+    final me = session.identity.publicKey;
     final others = call.participants.values.toList();
-    final tiles = <Widget>[
-      _Tile(
-        label: 'You',
-        avatar: PersonAvatar(
-          session: session,
-          pubkey: session.identity.publicKey,
-          size: 96,
+    final showMine = call.cameraOn || call.sharing;
+    final tiles = <(String, Widget)>[
+      (
+        me,
+        _Tile(
+          label: 'You',
+          avatar: PersonAvatar(session: session, pubkey: me, size: 96),
+          renderer: call.localRenderer,
+          showVideo: showMine,
+          muted: !call.micOn,
+          mirror: !call.sharing,
+          note: call.sharing ? 'Sharing screen' : null,
+          highlighted: highlight.value == me,
+          onHighlight: () => _toggle(me),
+          onFullscreen: showMine
+              ? () => openFullscreen(
+                  context,
+                  call.localRenderer,
+                  label: 'You',
+                  mirror: !call.sharing,
+                )
+              : null,
         ),
-        renderer: call.localRenderer,
-        showVideo: call.cameraOn || call.sharing,
-        muted: !call.micOn,
-        mirror: !call.sharing,
-        note: call.sharing ? 'Sharing screen' : null,
       ),
       for (final p in others)
-        _Tile(
-          label: session.displayName(p.pubkey),
-          avatar: PersonAvatar(session: session, pubkey: p.pubkey, size: 96),
-          renderer: p.renderer,
-          showVideo: (p.media.video || p.media.screen) && !p.videoHidden,
-          muted: !p.media.audio || p.mutedForMe,
-          quality: quality[p.pubkey]?.level,
-          onTap: () => _showPersonControls(context, session, call, p.pubkey),
-          note: switch (p.state) {
-            'connected' => p.media.screen ? 'Sharing screen' : null,
-            final state => state == 'new' ? 'Connecting…' : state,
-          },
+        (
+          p.pubkey,
+          _Tile(
+            label: session.displayName(p.pubkey),
+            avatar: PersonAvatar(session: session, pubkey: p.pubkey, size: 96),
+            renderer: p.renderer,
+            showVideo: (p.media.video || p.media.screen) && !p.videoHidden,
+            muted: !p.media.audio || p.mutedForMe,
+            quality: quality[p.pubkey]?.level,
+            onTap: () => _showPersonControls(
+              context,
+              session,
+              call,
+              p.pubkey,
+              highlight,
+            ),
+            note: switch (p.state) {
+              'connected' => p.media.screen ? 'Sharing screen' : null,
+              final state => state == 'new' ? 'Connecting…' : state,
+            },
+            highlighted: highlight.value == p.pubkey,
+            onHighlight: () => _toggle(p.pubkey),
+            onFullscreen:
+                (p.media.video || p.media.screen) &&
+                    !p.videoHidden &&
+                    p.renderer != null
+                ? () => openFullscreen(
+                    context,
+                    p.renderer,
+                    label: session.displayName(p.pubkey),
+                  )
+                : null,
+          ),
         ),
     ];
-    for (final pubkey in absent) {
-      tiles.add(
-        _AbsentTile(
-          session: session,
-          pubkey: pubkey,
-          ringing: ringing(pubkey),
-          onRing: () => onRing(pubkey),
+    if (others.isEmpty) {
+      tiles.add(('waiting', const _Waiting()));
+    }
+    final big = tiles.where((t) => t.$1 == highlight.value).firstOrNull;
+    if (big != null) {
+      final rest = [
+        for (final t in tiles)
+          if (t != big) t.$2,
+      ];
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Expanded(child: big.$2),
+            if (rest.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 120,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: rest.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 12),
+                  itemBuilder: (_, i) => SizedBox(width: 160, child: rest[i]),
+                ),
+              ),
+            ],
+          ],
         ),
       );
-    }
-    if (others.isEmpty && absent.isEmpty) {
-      tiles.add(const _Waiting());
     }
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -698,60 +772,196 @@ class _Tiles extends StatelessWidget {
           mainAxisSpacing: 12,
           crossAxisSpacing: 12,
           childAspectRatio: 4 / 3,
-          children: tiles,
+          children: [for (final t in tiles) t.$2],
         );
       },
     );
   }
 }
 
-/// A member outside the call: ringing, or a button to ring them.
-class _AbsentTile extends StatelessWidget {
-  const _AbsentTile({
-    required this.session,
-    required this.pubkey,
-    required this.ringing,
-    required this.onRing,
+/// Fills the window with [renderer], and the screen on web; Esc or the
+/// close button leaves.
+Future<void> openFullscreen(
+  BuildContext context,
+  RTCVideoRenderer? renderer, {
+  required String label,
+  bool mirror = false,
+}) async {
+  if (renderer == null) return;
+  enterBrowserFullscreen();
+  await Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) =>
+          _FullscreenVideo(renderer: renderer, label: label, mirror: mirror),
+    ),
+  );
+  exitBrowserFullscreen();
+}
+
+class _FullscreenVideo extends StatelessWidget {
+  const _FullscreenVideo({
+    required this.renderer,
+    required this.label,
+    required this.mirror,
   });
 
-  final Session session;
-  final String pubkey;
-  final bool ringing;
-  final VoidCallback onRing;
+  final RTCVideoRenderer renderer;
+  final String label;
+  final bool mirror;
 
   @override
-  Widget build(BuildContext context) => Panel(
-    toned: true,
-    child: Center(
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.escape): () =>
+          Navigator.of(context).maybePop(),
+    },
+    child: Focus(
+      autofocus: true,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          fit: StackFit.expand,
           children: [
-            PersonAvatar(session: session, pubkey: pubkey, size: 64),
-            const SizedBox(height: 8),
-            Text(session.displayName(pubkey)),
-            const SizedBox(height: 8),
-            if (ringing)
-              const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.ring_volume, size: 16),
-                  SizedBox(width: 6),
-                  Text('Ringing…'),
-                ],
-              )
-            else
-              OutlinedButton.icon(
-                icon: const Icon(Icons.ring_volume_outlined, size: 18),
-                label: const Text('Ring'),
-                onPressed: onRing,
+            RTCVideoView(
+              renderer,
+              mirror: mirror,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+            ),
+            Positioned(left: 16, bottom: 16, child: _Label(label)),
+            Positioned(
+              top: 16,
+              right: 16,
+              child: _TileButton(
+                icon: Icons.fullscreen_exit,
+                tooltip: 'Exit full screen (Esc)',
+                onPressed: () => Navigator.of(context).maybePop(),
               ),
+            ),
           ],
         ),
       ),
     ),
   );
+}
+
+class _TileButton extends StatelessWidget {
+  const _TileButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: Material(
+      color: MangaColors.paper,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(4),
+        side: const BorderSide(width: 1.5),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(4),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Icon(icon, size: 18),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Everyone in the group: who is in the call, and a ring for the rest.
+class _PeopleSheet extends StatelessWidget {
+  const _PeopleSheet({
+    required this.session,
+    required this.call,
+    required this.absent,
+    required this.ringing,
+    required this.onRing,
+  });
+
+  final Session session;
+  final GroupCall call;
+  final List<String> absent;
+  final bool Function(String pubkey) ringing;
+  final void Function([String? pubkey]) onRing;
+
+  Widget _person(String pubkey, {required String status, Widget? action}) =>
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: PersonAvatar(session: session, pubkey: pubkey, size: 36),
+        title: Text(session.displayName(pubkey)),
+        subtitle: Text(status),
+        trailing: action,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final me = session.identity.publicKey;
+    return SafeArea(
+      child: Center(
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('PEOPLE', style: text.headlineSmall),
+                const SizedBox(height: 12),
+                Text('IN THE CALL', style: text.titleSmall),
+                _person(me, status: 'Here'),
+                for (final p in call.participants.values)
+                  _person(p.pubkey, status: p.state),
+                if (absent.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(child: Text('NOT HERE', style: text.titleSmall)),
+                      TextButton.icon(
+                        icon: const Icon(Icons.ring_volume_outlined, size: 18),
+                        label: const Text('Ring everyone'),
+                        onPressed: absent.every(ringing) ? null : onRing,
+                      ),
+                    ],
+                  ),
+                  for (final pubkey in absent)
+                    ringing(pubkey)
+                        ? _person(
+                            pubkey,
+                            status: 'Ringing…',
+                            action: const Icon(Icons.ring_volume),
+                          )
+                        : _person(
+                            pubkey,
+                            status: 'Not in the call',
+                            action: OutlinedButton.icon(
+                              icon: const Icon(
+                                Icons.ring_volume_outlined,
+                                size: 18,
+                              ),
+                              label: const Text('Ring'),
+                              onPressed: () => onRing(pubkey),
+                            ),
+                          ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Waiting extends StatelessWidget {
@@ -780,6 +990,9 @@ class _Tile extends StatelessWidget {
     this.note,
     this.onTap,
     this.quality,
+    this.highlighted = false,
+    this.onHighlight,
+    this.onFullscreen,
   });
 
   final String label;
@@ -795,6 +1008,11 @@ class _Tile extends StatelessWidget {
 
   /// Shown only when the link struggles.
   final QualityLevel? quality;
+  final bool highlighted;
+  final VoidCallback? onHighlight;
+
+  /// Null when there is no video to show.
+  final VoidCallback? onFullscreen;
 
   @override
   Widget build(BuildContext context) {
@@ -836,6 +1054,30 @@ class _Tile extends StatelessWidget {
                   ),
                 ),
               ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Row(
+                children: [
+                  if (onHighlight case final toggle?)
+                    _TileButton(
+                      icon: highlighted
+                          ? Icons.close_fullscreen
+                          : Icons.open_in_full,
+                      tooltip: highlighted ? 'Back to the grid' : 'Highlight',
+                      onPressed: toggle,
+                    ),
+                  if (onFullscreen case final full?) ...[
+                    const SizedBox(width: 6),
+                    _TileButton(
+                      icon: Icons.fullscreen,
+                      tooltip: 'Full screen',
+                      onPressed: full,
+                    ),
+                  ],
+                ],
+              ),
+            ),
             Positioned(
               left: 8,
               bottom: 8,
@@ -882,10 +1124,11 @@ Future<void> _showPersonControls(
   Session session,
   GroupCall call,
   String pubkey,
+  ValueNotifier<String?> highlight,
 ) => showPanelSheet<void>(
   context,
   builder: (_) => ListenableBuilder(
-    listenable: call,
+    listenable: Listenable.merge([call, highlight]),
     builder: (context, _) {
       final p = call.participants[pubkey];
       if (p == null) return const SizedBox.shrink();
@@ -923,6 +1166,11 @@ Future<void> _showPersonControls(
                           ? null
                           : (v) => call.setVolume(pubkey, v),
                     ),
+                  ),
+                  SwitchListTile(
+                    title: const Text('Highlight: show them big'),
+                    value: highlight.value == pubkey,
+                    onChanged: (on) => highlight.value = on ? pubkey : null,
                   ),
                   SwitchListTile(
                     title: const Text('Hide video and screen share'),
@@ -982,7 +1230,8 @@ class _Controls extends StatelessWidget {
     child: SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+        // Matches the chat composer's height, so the side chat lines up.
+        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
         child: Wrap(
           alignment: WrapAlignment.center,
           spacing: 12,
