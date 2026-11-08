@@ -5,16 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/gifs.dart';
-import '../core/giphy.dart';
 import '../core/session.dart';
 import 'manga.dart';
 import 'theme.dart';
 
-/// GIPHY's downsized GIFs stay under this; so do saved ones.
 const _maxGifBytes = 8 * 1024 * 1024;
 
-/// The composer's GIF panel: this device's GIFs, and GIPHY search when the
-/// build has a key. A picked GIF goes out as an encrypted attachment.
+/// The composer's GIF panel: the GIFs saved on this device. A picked GIF
+/// goes out as an encrypted attachment.
 class GifPanel extends StatelessWidget {
   const GifPanel({super.key, required this.session, required this.onSend});
 
@@ -22,34 +20,10 @@ class GifPanel extends StatelessWidget {
   final Future<void> Function(Uint8List bytes, String filename) onSend;
 
   @override
-  Widget build(BuildContext context) {
-    final mine = _SavedGifs(session: session, onSend: onSend);
-    if (!giphyEnabled) return SizedBox(height: 300, child: mine);
-    return SizedBox(
-      height: 340,
-      child: DefaultTabController(
-        length: 2,
-        child: Column(
-          children: [
-            const TabBar(
-              tabs: [
-                Tab(height: 40, text: 'My GIFs'),
-                Tab(height: 40, text: 'GIPHY'),
-              ],
-            ),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  mine,
-                  _GiphySearch(session: session, onSend: onSend),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => SizedBox(
+    height: 300,
+    child: _SavedGifs(session: session, onSend: onSend),
+  );
 }
 
 /// Columns of about [tile] px across whatever width the panel gets.
@@ -208,143 +182,6 @@ class _SavedGifTileState extends State<_SavedGifTile> {
         },
       );
     },
-  );
-}
-
-class _GiphySearch extends StatefulWidget {
-  const _GiphySearch({required this.session, required this.onSend});
-
-  final Session session;
-  final Future<void> Function(Uint8List bytes, String filename) onSend;
-
-  @override
-  State<_GiphySearch> createState() => _GiphySearchState();
-}
-
-class _GiphySearchState extends State<_GiphySearch> {
-  final _giphy = Giphy();
-  final _query = TextEditingController();
-  Timer? _debounce;
-  late Future<List<GiphyGif>> _results = _giphy.trending();
-  String? _sending;
-
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    _query.dispose();
-    super.dispose();
-  }
-
-  void _search(String text) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 400), () {
-      final query = text.trim();
-      setState(
-        () =>
-            _results = query.isEmpty ? _giphy.trending() : _giphy.search(query),
-      );
-    });
-  }
-
-  /// Downloads first, so the chat never points at GIPHY.
-  Future<void> _pick(GiphyGif gif, {required bool save}) async {
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _sending = gif.id);
-    try {
-      final bytes = await _giphy.download(gif);
-      if (save) {
-        await widget.session.saveGif(bytes);
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Saved to My GIFs.')),
-        );
-      } else {
-        await widget.onSend(bytes, 'giphy-${gif.id}.gif');
-      }
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('GIPHY: $e')));
-    } finally {
-      if (mounted) setState(() => _sending = null);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-        child: TextField(
-          controller: _query,
-          onChanged: _search,
-          decoration: const InputDecoration(
-            hintText: 'Search GIPHY',
-            prefixIcon: Icon(Icons.search),
-            isDense: true,
-          ),
-        ),
-      ),
-      Expanded(
-        child: FutureBuilder(
-          future: _results,
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return Center(child: Text('GIPHY: ${snapshot.error}'));
-            }
-            final gifs = snapshot.data;
-            if (gifs == null) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (gifs.isEmpty) return const Center(child: Text('No GIFs.'));
-            return LayoutBuilder(
-              builder: (context, constraints) => GridView.builder(
-                padding: const EdgeInsets.all(8),
-                gridDelegate: _grid(constraints.maxWidth),
-                itemCount: gifs.length,
-                itemBuilder: (context, index) {
-                  final gif = gifs[index];
-                  return _Tile(
-                    tooltip: 'Send',
-                    onTap: _sending == null
-                        ? () => _pick(gif, save: false)
-                        : null,
-                    action: (
-                      icon: Icons.save_outlined,
-                      tooltip: 'Save to My GIFs',
-                      onPressed: _sending == null
-                          ? () => _pick(gif, save: true)
-                          : null,
-                    ),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.network(
-                          gif.preview,
-                          fit: BoxFit.cover,
-                          semanticLabel: gif.title,
-                          errorBuilder: (_, _, _) =>
-                              const Icon(Icons.broken_image_outlined),
-                        ),
-                        if (_sending == gif.id)
-                          const ColoredBox(
-                            color: Color(0x88FFFFFF),
-                            child: Center(child: CircularProgressIndicator()),
-                          ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            );
-          },
-        ),
-      ),
-      Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(
-          'Powered by GIPHY · searches go to GIPHY',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ),
-    ],
   );
 }
 

@@ -57,9 +57,7 @@ jobs:
           tool: wasm-bindgen-cli@0.2.130
       - run: flutter pub get
       - run: ./tool/build_web_assets.sh
-      - run: flutter build web --release --dart-define=MORANDUBA_GIPHY_KEY="$GIPHY_KEY"
-        env:
-          GIPHY_KEY: ${{ secrets.GIPHY_API_KEY }}
+      - run: flutter build web --release
       - run: cd build/web && zip -qr "$GITHUB_WORKSPACE/moranduba-web.zip" .
       - uses: actions/upload-artifact@v4
         with:
@@ -90,9 +88,7 @@ jobs:
       - name: Rust
         working-directory: app/rust
         run: rustup toolchain install
-      - run: flutter build linux --release --dart-define=MORANDUBA_GIPHY_KEY="$GIPHY_KEY"
-        env:
-          GIPHY_KEY: ${{ secrets.GIPHY_API_KEY }}
+      - run: flutter build linux --release
       - run: ./tool/bundle_sfu.sh linux
       - run: >
           tar -czf "$GITHUB_WORKSPACE/moranduba-linux-x64.tar.gz"
@@ -122,9 +118,7 @@ jobs:
       - name: Rust
         working-directory: app/rust
         run: rustup toolchain install
-      - run: flutter build macos --release --dart-define=MORANDUBA_GIPHY_KEY="$GIPHY_KEY"
-        env:
-          GIPHY_KEY: ${{ secrets.GIPHY_API_KEY }}
+      - run: flutter build macos --release
       # Ad hoc signed: macOS asks to confirm the first launch.
       - run: ./tool/bundle_sfu.sh macos
       - run: >
@@ -157,9 +151,7 @@ jobs:
       - name: Rust
         working-directory: app/rust
         run: rustup toolchain install
-      - run: flutter build windows --release --dart-define=MORANDUBA_GIPHY_KEY="$GIPHY_KEY"
-        env:
-          GIPHY_KEY: ${{ secrets.GIPHY_API_KEY }}
+      - run: flutter build windows --release
       - run: ./tool/bundle_sfu.sh windows
       - shell: pwsh
         run: >
@@ -191,9 +183,7 @@ jobs:
         working-directory: app/rust
         run: rustup toolchain install
       # Signed with the debug key until a release keystore exists.
-      - run: flutter build apk --release --dart-define=MORANDUBA_GIPHY_KEY="$GIPHY_KEY"
-        env:
-          GIPHY_KEY: ${{ secrets.GIPHY_API_KEY }}
+      - run: flutter build apk --release
       - run: >
           cp build/app/outputs/flutter-apk/app-release.apk
           "$GITHUB_WORKSPACE/moranduba-android.apk"
