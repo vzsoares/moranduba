@@ -11,8 +11,11 @@ Mode="$(tr '[:lower:]' '[:upper:]' <<<"${mode:0:1}")${mode:1}"
 sfu="$PWD/../sfu"
 
 build() {
+  # go build runs inside sfu/, so a relative output must be anchored here.
+  local out="$3"
+  [[ $out == /* ]] || out="$PWD/$out"
   (cd "$sfu" && CGO_ENABLED=0 GOOS="$1" GOARCH="$2" \
-    go build -trimpath -ldflags="-s -w" -o "$3" .)
+    go build -trimpath -ldflags="-s -w" -o "$out" .)
 }
 
 case "$platform" in
