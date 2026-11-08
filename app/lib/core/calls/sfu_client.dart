@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
+import '../publish.dart';
+
 class SfuException implements Exception {
   const SfuException(this.message);
 
@@ -102,10 +104,10 @@ class SfuClient {
         content: content,
       ),
     );
-    final responses = await _ndk.broadcast
-        .broadcast(nostrEvent: wrap, specificRelays: relays)
-        .broadcastDoneFuture;
-    if (!responses.any((r) => r.broadcastSuccessful)) {
+    final taken = await acceptedByAny(
+      _ndk.broadcast.broadcast(nostrEvent: wrap, specificRelays: relays),
+    );
+    if (!taken) {
       throw const SfuException('No relay took the request');
     }
   }

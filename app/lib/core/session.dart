@@ -29,6 +29,7 @@ import 'identity.dart';
 import 'network.dart';
 import 'outbox.dart';
 import 'profiles.dart';
+import 'publish.dart';
 import 'push/push.dart';
 import 'relays.dart';
 import 'status.dart';
@@ -1398,21 +1399,21 @@ class Session extends ChangeNotifier {
       forceRefresh: true,
       discoveryRelays: relays,
     );
-    final sent = await Future.wait([
-      _ndk.broadcast
-          .broadcast(
-            nostrEvent: await wrapFor(pubkey),
-            specificRelays: theirRelays ?? relays,
-          )
-          .broadcastDoneFuture,
-      _ndk.broadcast
-          .broadcast(
-            nostrEvent: await wrapFor(identity.publicKey),
-            specificRelays: relays,
-          )
-          .broadcastDoneFuture,
+    final [delivered, _] = await Future.wait([
+      acceptedByAny(
+        _ndk.broadcast.broadcast(
+          nostrEvent: await wrapFor(pubkey),
+          specificRelays: theirRelays ?? relays,
+        ),
+      ),
+      acceptedByAny(
+        _ndk.broadcast.broadcast(
+          nostrEvent: await wrapFor(identity.publicKey),
+          specificRelays: relays,
+        ),
+      ),
     ]);
-    if (!sent.first.any((r) => r.broadcastSuccessful)) {
+    if (!delivered) {
       throw StateError('No relay accepted the message');
     }
   }

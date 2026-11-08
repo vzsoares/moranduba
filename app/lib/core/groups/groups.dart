@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
+import '../publish.dart';
 import 'blossom.dart';
 import 'group_engine.dart';
 import 'space.dart';
@@ -470,10 +471,10 @@ class Groups extends ChangeNotifier {
   }
 
   Future<void> _publish(Nip01Event event, Iterable<String> to) async {
-    final responses = await _ndk.broadcast
-        .broadcast(nostrEvent: event, specificRelays: to)
-        .broadcastDoneFuture;
-    if (!responses.any((r) => r.broadcastSuccessful)) {
+    final taken = await acceptedByAny(
+      _ndk.broadcast.broadcast(nostrEvent: event, specificRelays: to),
+    );
+    if (!taken) {
       throw StateError('No relay accepted event ${event.id}');
     }
   }
