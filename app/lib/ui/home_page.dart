@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../core/groups/group_engine.dart';
 import '../core/groups/groups.dart';
+import '../core/groups/space.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
 import 'audio_settings.dart';
@@ -56,6 +57,18 @@ class _HomePageState extends State<HomePage>
         final requests =
             session.incomingRequests.length +
             (session.groups?.invites.length ?? 0);
+        if (MediaQuery.sizeOf(context).width >= _wideFrom) {
+          return _WideHome(
+            session: session,
+            requests: requests,
+            onAddFriend: () => _addFriend(context),
+            onNewGroup: () => showDialog<String>(
+              context: context,
+              builder: (_) => NewGroupDialog(session: session),
+            ),
+            onProfile: () => _showIdentity(context),
+          );
+        }
         return Scaffold(
           appBar: AppBar(
             title: const Row(
@@ -108,6 +121,12 @@ class _HomePageState extends State<HomePage>
                   _FriendsTab(
                     session: session,
                     onAdd: () => _addFriend(context),
+                    onOpen: (pubkey) => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            ChatPage(session: session, peer: pubkey),
+                      ),
+                    ),
                   ),
                   GroupsTab(
                     session: session,
@@ -161,6 +180,322 @@ class _HomePageState extends State<HomePage>
   Future<void> _showIdentity(BuildContext context) => showPanelSheet<void>(
     context,
     builder: (_) => _IdentitySheet(session: session, onLogout: widget.onLogout),
+  );
+}
+
+/// From this width the home becomes a rail, a list and the open chat.
+const _wideFrom = 900.0;
+
+/// What the wide home shows beside the rail.
+sealed class _Pane {
+  const _Pane();
+}
+
+/// Direct messages; [peer] is the chat open, if any.
+class _HomePane extends _Pane {
+  const _HomePane([this.peer]);
+
+  final String? peer;
+}
+
+class _GroupPane extends _Pane {
+  const _GroupPane(this.groupId);
+
+  final String groupId;
+}
+
+class _RequestsPane extends _Pane {
+  const _RequestsPane();
+}
+
+/// Discord-style home for wide windows: a rail of home, groups and actions;
+/// a friends column on home; the open chat filling the rest.
+class _WideHome extends StatefulWidget {
+  const _WideHome({
+    required this.session,
+    required this.requests,
+    required this.onAddFriend,
+    required this.onNewGroup,
+    required this.onProfile,
+  });
+
+  final Session session;
+  final int requests;
+  final VoidCallback onAddFriend;
+  final Future<String?> Function() onNewGroup;
+  final VoidCallback onProfile;
+
+  @override
+  State<_WideHome> createState() => _WideHomeState();
+}
+
+class _WideHomeState extends State<_WideHome> {
+  _Pane _pane = const _HomePane();
+
+  Session get session => widget.session;
+
+  Future<void> _newGroup() async {
+    final groupId = await widget.onNewGroup();
+    if (groupId != null && mounted) {
+      setState(() => _pane = _GroupPane(groupId));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = session.groups;
+    final pane = _pane;
+    return Scaffold(
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DecoratedBox(
+            decoration: const BoxDecoration(
+              color: MangaColors.paper,
+              border: Border(right: BorderSide(width: MangaShape.stroke)),
+            ),
+            child: SizedBox(
+              width: 76,
+              child: SafeArea(
+                right: false,
+                child: Column(
+                  children: [
+                    const SizedBox(height: 12),
+                    _RailItem(
+                      tooltip: 'Direct messages',
+                      selected: pane is _HomePane,
+                      onTap: () => setState(() => _pane = const _HomePane()),
+                      child: const Logo(size: 26),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 8,
+                      ),
+                      child: Divider(thickness: 2, height: 2),
+                    ),
+                    Expanded(
+                      child: ListView(
+                        children: [
+                          for (final space in groups?.spaces ?? const <Space>[])
+                            _RailItem(
+                              tooltip: space.name,
+                              selected:
+                                  pane is _GroupPane &&
+                                  pane.groupId == space.id,
+                              onTap: () =>
+                                  setState(() => _pane = _GroupPane(space.id)),
+                              child: Text(
+                                _initials(space.name),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          if (groups != null)
+                            _RailItem(
+                              tooltip: 'New group',
+                              onTap: _newGroup,
+                              child: const Icon(Icons.add),
+                            ),
+                        ],
+                      ),
+                    ),
+                    _RailItem(
+                      tooltip: 'Requests',
+                      selected: pane is _RequestsPane,
+                      onTap: () =>
+                          setState(() => _pane = const _RequestsPane()),
+                      badge: widget.requests,
+                      child: const Icon(Icons.inbox_outlined),
+                    ),
+                    _RailItem(
+                      tooltip: 'Profile and key',
+                      onTap: widget.onProfile,
+                      child: PersonAvatar(
+                        session: session,
+                        pubkey: session.identity.publicKey,
+                        size: 44,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (pane is _HomePane)
+            DecoratedBox(
+              decoration: const BoxDecoration(
+                border: Border(right: BorderSide(width: MangaShape.stroke)),
+              ),
+              child: SizedBox(
+                width: 260,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 8, 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'FRIENDS',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Add friend',
+                            icon: const Icon(Icons.person_add_alt),
+                            onPressed: widget.onAddFriend,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: _FriendsTab(
+                        session: session,
+                        compact: true,
+                        selected: pane.peer,
+                        onAdd: widget.onAddFriend,
+                        onOpen: (pubkey) =>
+                            setState(() => _pane = _HomePane(pubkey)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: switch (pane) {
+              _HomePane(peer: final peer?) => ChatPage(
+                key: ValueKey(peer),
+                session: session,
+                peer: peer,
+              ),
+              _HomePane() => const EmptyState(
+                icon: Icons.forum_outlined,
+                title: 'PICK A CHAT',
+                message: 'Friends are on the left, groups on the rail.',
+              ),
+              _GroupPane(:final groupId) => GroupChatPage(
+                key: ValueKey(groupId),
+                session: session,
+                groupId: groupId,
+              ),
+              _RequestsPane() => Scaffold(
+                appBar: AppBar(title: const Text('REQUESTS')),
+                body: _RequestsTab(session: session),
+              ),
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Up to two letters for a group's rail icon.
+String _initials(String name) {
+  final words = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+  final letters = [for (final w in words.take(2)) w.characters.first];
+  return letters.isEmpty ? '?' : letters.join().toUpperCase();
+}
+
+/// A round rail button; the selected one gets Discord's pill on the left.
+class _RailItem extends StatelessWidget {
+  const _RailItem({
+    required this.tooltip,
+    required this.onTap,
+    required this.child,
+    this.selected = false,
+    this.badge = 0,
+  });
+
+  final String tooltip;
+  final VoidCallback onTap;
+  final Widget child;
+  final bool selected;
+  final int badge;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 4,
+          height: selected ? 36 : 0,
+          decoration: const BoxDecoration(
+            color: MangaColors.ink,
+            borderRadius: BorderRadius.horizontal(right: Radius.circular(4)),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Tooltip(
+          message: tooltip,
+          child: InkResponse(
+            onTap: onTap,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: 48,
+                  height: 48,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: selected ? MangaColors.tone : MangaColors.paper,
+                    borderRadius: BorderRadius.circular(selected ? 14 : 24),
+                    border: Border.all(width: MangaShape.stroke),
+                  ),
+                  child: child,
+                ),
+                if (badge > 0)
+                  Positioned(right: -4, top: -4, child: _Badge(count: badge)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// A row in the sidebar column: highlighted while its chat is open.
+class _SideRow extends StatelessWidget {
+  const _SideRow({
+    required this.selected,
+    required this.leading,
+    required this.title,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final Widget leading;
+  final Widget title;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: selected ? MangaColors.tone : MangaColors.paper,
+    borderRadius: MangaShape.borderRadius,
+    child: InkWell(
+      borderRadius: MangaShape.borderRadius,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Row(
+          children: [
+            leading,
+            const SizedBox(width: 10),
+            Expanded(child: title),
+          ],
+        ),
+      ),
+    ),
   );
 }
 
@@ -218,10 +553,23 @@ class _PersonPanel extends StatelessWidget {
 }
 
 class _FriendsTab extends StatelessWidget {
-  const _FriendsTab({required this.session, required this.onAdd});
+  const _FriendsTab({
+    required this.session,
+    required this.onAdd,
+    required this.onOpen,
+    this.selected,
+    this.compact = false,
+  });
 
   final Session session;
   final VoidCallback onAdd;
+  final ValueChanged<String> onOpen;
+
+  /// The chat open beside the list, on wide layouts.
+  final String? selected;
+
+  /// The sidebar column: tighter, no empty-state art.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -235,12 +583,22 @@ class _FriendsTab extends StatelessWidget {
       );
     }
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 96),
+      padding: compact
+          ? const EdgeInsets.all(12)
+          : const EdgeInsets.fromLTRB(24, 20, 24, 96),
       itemCount: friends.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 12),
+      separatorBuilder: (_, _) => SizedBox(height: compact ? 8 : 12),
       itemBuilder: (context, i) {
         final pubkey = friends[i];
         final chat = session.chatWith(pubkey);
+        if (compact) {
+          return _SideRow(
+            selected: pubkey == selected,
+            leading: PersonAvatar(session: session, pubkey: pubkey, size: 32),
+            title: PersonName(session: session, pubkey: pubkey),
+            onTap: () => onOpen(pubkey),
+          );
+        }
         return Entrance(
           index: i,
           child: _PersonPanel(
@@ -253,11 +611,7 @@ class _FriendsTab extends StatelessWidget {
               final last => last.content,
             },
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => ChatPage(session: session, peer: pubkey),
-              ),
-            ),
+            onTap: () => onOpen(pubkey),
           ),
         );
       },
