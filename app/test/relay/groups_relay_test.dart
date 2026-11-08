@@ -17,6 +17,7 @@ import 'package:moranduba/core/groups/mls_native.dart';
 import 'package:moranduba/core/groups/rust_group_engine.dart';
 import 'package:moranduba/core/identity.dart';
 import 'package:moranduba/core/session.dart';
+import 'package:moranduba/core/status.dart';
 
 import '../support/fake_blossom.dart';
 
@@ -42,9 +43,10 @@ Future<Session> _start(
   Identity identity,
   SnapshotStore store, {
   BlossomClient? blossom,
+  List<String> relays = _relays,
 }) => Session.start(
   identity,
-  relays: _relays,
+  relays: relays,
   blossom: blossom,
   openStore: (_) async => MemorySnapshotStore(),
   openGroupEngine: () => RustGroupEngine.open(
@@ -56,6 +58,30 @@ Future<Session> _start(
 );
 
 void main() {
+  test('groups start even when no relay takes the key package', () async {
+    final session = await _start(
+      Identity.generate(),
+      MemorySnapshotStore(),
+      relays: const ['ws://localhost:1'],
+    );
+    addTearDown(session.close);
+    expect(session.groupsError, isNull);
+    expect(session.groups!.keyPackageError, isNotNull);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
+  test('the relay probe tells a working relay from a dead one', () async {
+    final session = await _start(Identity.generate(), MemorySnapshotStore());
+    addTearDown(session.close);
+    // In parallel, as the status page runs them.
+    final [working, dead] = await Future.wait([
+      session.status.relay(_relays.single),
+      session.status.relay('ws://localhost:1'),
+    ]);
+    expect(working.health, isNot(Health.down), reason: working.detail);
+    expect(working.latency, isNotNull);
+    expect(dead.health, Health.down);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
   test('invite over gift wrap, chat, leave, and restart', () async {
     final aliceId = Identity.generate();
     final bobId = Identity.generate();

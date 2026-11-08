@@ -244,32 +244,18 @@ class SfuTransport implements CallTransport {
       for (final entry in _streams.entries)
         for (final track in entry.value.getTracks()) ?track.id: entry.key,
     };
-    final frames = <String, int>{};
-    final packets = <String, int>{};
-    for (final report in await pc.getStats()) {
+    final reports = await pc.getStats();
+    final tallies = {for (final p in _streams.keys) p: LinkTally()};
+    for (final report in reports) {
       if (report.type != 'inbound-rtp') continue;
-      final values = report.values;
-      final participant = owner[values['trackIdentifier']];
-      if (participant == null) continue;
-      final count = switch (values[values['kind'] == 'video'
-          ? 'framesDecoded'
-          : 'packetsReceived']) {
-        final num n => n.toInt(),
-        _ => 0,
-      };
-      final into = values['kind'] == 'video' ? frames : packets;
-      into[participant] = (into[participant] ?? 0) + count;
+      final participant = owner[report.values['trackIdentifier']];
+      tallies[participant]?.inbound(report.values);
     }
-    final state =
-        pc.connectionState?.name.replaceFirst('RTCPeerConnectionState', '') ??
-        'new';
+    final state = connectionStateOf(pc);
+    final roundTrip = roundTripOf(reports);
     return {
-      for (final participant in _streams.keys)
-        participant: LinkStats(
-          state: state,
-          framesDecoded: frames[participant] ?? 0,
-          audioPackets: packets[participant] ?? 0,
-        ),
+      for (final MapEntry(key: participant, value: tally) in tallies.entries)
+        participant: tally.stats(state, roundTrip: roundTrip),
     };
   }
 

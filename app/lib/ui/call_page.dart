@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ndk/shared/nips/nip19/nip19.dart';
 
+import '../core/calls/call_quality.dart';
 import '../core/calls/group_call.dart';
 import '../core/calls/screen_capture.dart';
 import '../core/session.dart';
@@ -84,6 +85,19 @@ class _CallPageState extends State<CallPage> {
   final _ringback = RingTone.ringback();
   Timer? _ringbackLimit;
 
+  final _quality = ValueNotifier<Map<String, LinkQuality>>(const {});
+  Timer? _qualityTimer;
+
+  Future<void> _measureQuality() async {
+    if (call.closed) return;
+    try {
+      final quality = await call.quality();
+      if (mounted) _quality.value = quality;
+    } catch (e) {
+      debugPrint('call quality: $e');
+    }
+  }
+
   /// A hotkey or the call bar can end the call while this page shows.
   void _closeWhenOver() {
     if (!call.closed || !mounted) return;
@@ -101,12 +115,18 @@ class _CallPageState extends State<CallPage> {
     call.addListener(_syncRingback);
     _syncRingback();
     _ringbackLimit = Timer(const Duration(seconds: 15), _endRingback);
+    _qualityTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => unawaited(_measureQuality()),
+    );
   }
 
   @override
   void dispose() {
     call.removeListener(_closeWhenOver);
     _endRingback();
+    _qualityTimer?.cancel();
+    _quality.dispose();
     super.dispose();
   }
 
@@ -145,7 +165,11 @@ class _CallPageState extends State<CallPage> {
                     'Big call: cameras pause on mesh. A server keeps them on.',
                   ),
                 Expanded(
-                  child: _Tiles(session: session, call: call),
+                  child: ValueListenableBuilder(
+                    valueListenable: _quality,
+                    builder: (context, quality, _) =>
+                        _Tiles(session: session, call: call, quality: quality),
+                  ),
                 ),
                 _Controls(call: call, onHangUp: _hangUp),
               ],
@@ -154,6 +178,7 @@ class _CallPageState extends State<CallPage> {
               appBar: AppBar(
                 title: Text(name.toUpperCase()),
                 actions: [
+                  _QualityButton(session: session, quality: _quality),
                   IconButton(
                     tooltip: 'Audio settings',
                     icon: const Icon(Icons.settings_voice_outlined),
@@ -468,10 +493,15 @@ class _Notice extends StatelessWidget {
 }
 
 class _Tiles extends StatelessWidget {
-  const _Tiles({required this.session, required this.call});
+  const _Tiles({
+    required this.session,
+    required this.call,
+    required this.quality,
+  });
 
   final Session session;
   final GroupCall call;
+  final Map<String, LinkQuality> quality;
 
   @override
   Widget build(BuildContext context) {
@@ -497,6 +527,7 @@ class _Tiles extends StatelessWidget {
           renderer: p.renderer,
           showVideo: (p.media.video || p.media.screen) && !p.videoHidden,
           muted: !p.media.audio || p.mutedForMe,
+          quality: quality[p.pubkey]?.level,
           onTap: () => _showPersonControls(context, session, call, p.pubkey),
           note: switch (p.state) {
             'connected' => p.media.screen ? 'Sharing screen' : null,
@@ -554,6 +585,7 @@ class _Tile extends StatelessWidget {
     this.mirror = false,
     this.note,
     this.onTap,
+    this.quality,
   });
 
   final String label;
@@ -567,9 +599,13 @@ class _Tile extends StatelessWidget {
   final bool mirror;
   final String? note;
 
+  /// Shown only when the link struggles.
+  final QualityLevel? quality;
+
   @override
   Widget build(BuildContext context) {
     final video = renderer;
+    final quality = this.quality;
     final tile = DecoratedBox(
       decoration: BoxDecoration(
         color: MangaColors.charcoal,
@@ -616,6 +652,14 @@ class _Tile extends StatelessWidget {
                   if (muted) ...[
                     const SizedBox(width: 6),
                     const _Label.icon(Icons.mic_off),
+                  ],
+                  if (quality == QualityLevel.fair ||
+                      quality == QualityLevel.poor) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: 'Weak connection',
+                      child: _Label.icon(qualityIcon(quality)),
+                    ),
                   ],
                   const Spacer(),
                   if (note case final text?) _Label(text),
@@ -933,4 +977,83 @@ class _RoundButton extends StatelessWidget {
       ),
     );
   }
+}
+
+IconData qualityIcon(QualityLevel? level) => switch (level) {
+  QualityLevel.good => Icons.signal_cellular_alt,
+  QualityLevel.fair => Icons.signal_cellular_alt_2_bar,
+  QualityLevel.poor => Icons.signal_cellular_alt_1_bar,
+  QualityLevel.unknown || null => Icons.signal_cellular_null,
+};
+
+String _qualityName(QualityLevel level) => switch (level) {
+  QualityLevel.good => 'good',
+  QualityLevel.fair => 'fair',
+  QualityLevel.poor => 'poor',
+  QualityLevel.unknown => 'measuring…',
+};
+
+/// Signal bars for the worst link; tapping lists every link's numbers.
+class _QualityButton extends StatelessWidget {
+  const _QualityButton({required this.session, required this.quality});
+
+  final Session session;
+  final ValueListenable<Map<String, LinkQuality>> quality;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: quality,
+    builder: (context, links, _) {
+      final worst = worstOf(links.values);
+      return IconButton(
+        tooltip: 'Connection: ${_qualityName(worst)}',
+        icon: Icon(
+          qualityIcon(worst),
+          color: worst == QualityLevel.poor ? MangaColors.error : null,
+        ),
+        onPressed: () => showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('CONNECTION'),
+            content: SizedBox(
+              width: 420,
+              child: ValueListenableBuilder(
+                valueListenable: quality,
+                builder: (context, links, _) => Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (links.isEmpty) const Text('Nobody else is here yet.'),
+                    for (final MapEntry(key: pubkey, value: link)
+                        in links.entries)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(qualityIcon(link.level)),
+                        title: Text(
+                          '${session.displayName(pubkey)}: '
+                          '${_qualityName(link.level)}',
+                        ),
+                        subtitle: Text(_numbers(link), style: monoStyle),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+
+  static String _numbers(LinkQuality link) => [
+    if (link.roundTrip case final rtt?) 'delay ${rtt.inMilliseconds} ms',
+    if (link.loss case final loss?) 'loss ${(loss * 100).toStringAsFixed(1)}%',
+    if (link.jitter case final jitter?) 'jitter ${jitter.inMilliseconds} ms',
+  ].join(' · ');
 }

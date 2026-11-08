@@ -31,6 +31,7 @@ import 'outbox.dart';
 import 'profiles.dart';
 import 'push/push.dart';
 import 'relays.dart';
+import 'status.dart';
 
 /// One logged-in identity: relay connection, DM inbox, friendships and
 /// groups.
@@ -183,6 +184,21 @@ class Session extends ChangeNotifier {
     me: identity.publicKey,
     relays: relays,
   );
+
+  late final StatusProbe status = StatusProbe(_ndk, me: identity.publicKey);
+
+  /// Call servers our groups use or we claimed, with what uses them.
+  Map<String, List<String>> get callServers {
+    final users = <String, List<String>>{
+      for (final pubkey in servers.owned) pubkey: ['claimed by you'],
+    };
+    for (final space in groups?.spaces ?? const <Space>[]) {
+      if (serverOf(space.id) case final pubkey?) {
+        (users[pubkey] ??= []).add(space.name);
+      }
+    }
+    return users;
+  }
 
   /// The call server this desktop runs, while hosting.
   HostedSfu? hosting;

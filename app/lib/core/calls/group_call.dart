@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../groups/groups.dart';
 import 'audio_prefs.dart';
 import 'call_crypto.dart';
+import 'call_quality.dart';
 import 'call_signal.dart';
 import 'mesh_transport.dart';
 import 'screen_capture.dart';
@@ -92,6 +93,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
   @override
   final CallCrypto crypto;
   late CallTransport _transport;
+  final _meter = QualityMeter();
 
   /// Builds transports for mode switches, through the SFU when named;
   /// null when switching is off.
@@ -626,6 +628,10 @@ class GroupCall extends ChangeNotifier implements CallHost {
     },
     'cryptors': crypto.allStates,
   };
+
+  /// Each link's quality since the previous call; poll it on a timer.
+  Future<Map<String, LinkQuality>> quality() async =>
+      _meter.measure(await _transport.stats());
 
   Future<void> leave() async {
     if (_closed) return;

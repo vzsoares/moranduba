@@ -59,18 +59,97 @@ class LinkStats {
     required this.state,
     this.framesDecoded = 0,
     this.audioPackets = 0,
+    this.packetsReceived = 0,
+    this.packetsLost = 0,
+    this.roundTrip,
+    this.jitter,
   });
 
   final String state;
   final int framesDecoded;
   final int audioPackets;
 
+  /// Audio and video, since the link started.
+  final int packetsReceived;
+  final int packetsLost;
+
+  /// To the peer in mesh, to the SFU otherwise.
+  final Duration? roundTrip;
+
+  /// Worst inbound audio jitter.
+  final Duration? jitter;
+
   Map<String, Object> toJson() => {
     'state': state,
     'framesDecoded': framesDecoded,
     'audioPackets': audioPackets,
+    'packetsReceived': packetsReceived,
+    'packetsLost': packetsLost,
+    'roundTripMs': ?roundTrip?.inMilliseconds,
+    'jitterMs': ?jitter?.inMilliseconds,
   };
 }
+
+/// Sums inbound-rtp reports into one [LinkStats].
+class LinkTally {
+  int _frames = 0;
+  int _audioPackets = 0;
+  int _received = 0;
+  int _lost = 0;
+  double? _jitter;
+
+  void inbound(Map<Object?, Object?> values) {
+    final received = _int(values['packetsReceived']);
+    _received += received;
+    _lost += _int(values['packetsLost']);
+    if (values['kind'] == 'video') {
+      _frames += _int(values['framesDecoded']);
+    } else if (values['kind'] == 'audio') {
+      _audioPackets += received;
+      if (values['jitter'] case final num jitter
+          when jitter > (_jitter ?? -1)) {
+        _jitter = jitter.toDouble();
+      }
+    }
+  }
+
+  LinkStats stats(String state, {Duration? roundTrip}) => LinkStats(
+    state: state,
+    framesDecoded: _frames,
+    audioPackets: _audioPackets,
+    packetsReceived: _received,
+    packetsLost: _lost,
+    roundTrip: roundTrip,
+    jitter: _seconds(_jitter),
+  );
+}
+
+int _int(Object? value) => switch (value) {
+  final num n => n.toInt(),
+  _ => 0,
+};
+
+Duration? _seconds(Object? value) => switch (value) {
+  final num n => Duration(microseconds: (n * 1e6).round()),
+  _ => null,
+};
+
+/// The round trip of the candidate pair carrying media.
+Duration? roundTripOf(List<StatsReport> reports) {
+  for (final report in reports) {
+    final values = report.values;
+    if (report.type == 'candidate-pair' &&
+        values['state'] == 'succeeded' &&
+        values['nominated'] != false) {
+      if (_seconds(values['currentRoundTripTime']) case final rtt?) return rtt;
+    }
+  }
+  return null;
+}
+
+String connectionStateOf(RTCPeerConnection pc) =>
+    pc.connectionState?.name.replaceFirst('RTCPeerConnectionState', '') ??
+    'new';
 
 const defaultIceServers = [
   {'urls': 'stun:stun.l.google.com:19302'},
@@ -137,25 +216,10 @@ Future<RTCSessionDescription?> gatheredDescription(RTCPeerConnection pc) async {
 }
 
 Future<LinkStats> linkStats(RTCPeerConnection pc) async {
-  var frames = 0;
-  var packets = 0;
-  for (final report in await pc.getStats()) {
-    if (report.type != 'inbound-rtp') continue;
-    final values = report.values;
-    if (values['kind'] == 'video') {
-      frames += switch (values['framesDecoded']) {
-        final num n => n.toInt(),
-        _ => 0,
-      };
-    } else if (values['kind'] == 'audio') {
-      packets += switch (values['packetsReceived']) {
-        final num n => n.toInt(),
-        _ => 0,
-      };
-    }
+  final reports = await pc.getStats();
+  final tally = LinkTally();
+  for (final report in reports) {
+    if (report.type == 'inbound-rtp') tally.inbound(report.values);
   }
-  final state =
-      pc.connectionState?.name.replaceFirst('RTCPeerConnectionState', '') ??
-      'new';
-  return LinkStats(state: state, framesDecoded: frames, audioPackets: packets);
+  return tally.stats(connectionStateOf(pc), roundTrip: roundTripOf(reports));
 }

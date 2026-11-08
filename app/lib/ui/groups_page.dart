@@ -10,6 +10,7 @@ import '../core/groups/group_engine.dart';
 import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
+import '../core/status.dart';
 import 'call_page.dart';
 import 'chat_page.dart';
 import 'expiry_button.dart';
@@ -19,6 +20,7 @@ import 'people.dart';
 import 'picture_cropper.dart';
 import 'search.dart';
 import 'server_dialog.dart';
+import 'status_page.dart';
 import 'theme.dart';
 
 class GroupsTab extends StatelessWidget {
@@ -34,7 +36,13 @@ class GroupsTab extends StatelessWidget {
       return EmptyState(
         icon: Icons.lock_outline,
         title: 'GROUPS ARE OFF',
-        message: 'The encryption engine did not start: ${session.groupsError}',
+        message:
+            'The encryption engine did not start: '
+            '${describeError(session.groupsError ?? 'unknown error')}',
+        action: OutlinedButton(
+          onPressed: () => showConnectionStatus(context, session),
+          child: const Text('Check connections'),
+        ),
       );
     }
     final spaces = groups.spaces;

@@ -19,6 +19,7 @@ import 'people.dart';
 import 'profile_editor.dart';
 import 'search.dart';
 import 'server_settings.dart';
+import 'status_page.dart';
 import 'theme.dart';
 
 class HomePage extends StatefulWidget {
@@ -943,6 +944,13 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                     widget.session,
                     onReconnect: widget.onReconnect,
                   ),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.network_check, size: 18),
+                  label: const Text('Connection status'),
+                  onPressed: () =>
+                      showConnectionStatus(context, widget.session),
                 ),
                 const SizedBox(height: 20),
                 Text('YOUR KEY', style: text.headlineSmall),
