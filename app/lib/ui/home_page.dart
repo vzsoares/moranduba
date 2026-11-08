@@ -12,6 +12,7 @@ import '../core/session.dart';
 import 'audio_settings.dart';
 import 'chat_page.dart';
 import 'groups_page.dart';
+import 'hotkeys.dart';
 import 'manga.dart';
 import 'notifications/notifications.dart';
 import 'people.dart';
@@ -843,6 +844,12 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   icon: const Icon(Icons.settings_voice_outlined, size: 18),
                   label: const Text('Audio: microphone and speaker'),
                   onPressed: () => showAudioSettings(context, widget.session),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.keyboard_outlined, size: 18),
+                  label: const Text('Call hotkeys'),
+                  onPressed: () => showHotkeySettings(context, widget.session),
                 ),
                 const SizedBox(height: 20),
                 Text('YOUR KEY', style: text.headlineSmall),

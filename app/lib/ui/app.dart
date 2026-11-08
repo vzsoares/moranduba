@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app_controller.dart';
 import 'call_bar.dart';
 import 'home_page.dart';
+import 'hotkeys.dart';
 import 'incoming_call.dart';
 import 'manga.dart';
 import 'onboarding_page.dart';
@@ -27,13 +28,16 @@ class _MorandubaAppState extends State<MorandubaApp> {
     return MaterialApp(
       title: 'Moranduba',
       navigatorKey: _navigator,
-      builder: (context, child) => CallBarLayer(
+      builder: (context, child) => HotkeyLayer(
         controller: controller,
-        navigator: _navigator,
-        child: IncomingCallLayer(
+        child: CallBarLayer(
           controller: controller,
           navigator: _navigator,
-          child: child ?? const SizedBox.shrink(),
+          child: IncomingCallLayer(
+            controller: controller,
+            navigator: _navigator,
+            child: child ?? const SizedBox.shrink(),
+          ),
         ),
       ),
       debugShowCheckedModeBanner: false,

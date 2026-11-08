@@ -22,6 +22,7 @@ import 'groups/group_engine.dart';
 import 'groups/groups.dart';
 import 'groups/mls_bridge.dart';
 import 'groups/mls_platform.dart';
+import 'hotkeys.dart';
 import 'identity.dart';
 import 'outbox.dart';
 import 'profiles.dart';
@@ -46,6 +47,7 @@ class Session extends ChangeNotifier {
     this.dms,
     this.outbox,
     this.audio,
+    this.hotkeys,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -95,6 +97,10 @@ class Session extends ChangeNotifier {
       await openStore('${identity.publicKey}-audio'),
     );
     await audioPrefs.load();
+    final hotkeyBook = HotkeyBook(
+      await openStore('${identity.publicKey}-hotkeys'),
+    );
+    await hotkeyBook.load();
     final session = Session._(
       identity,
       ndk,
@@ -110,6 +116,7 @@ class Session extends ChangeNotifier {
       dmArchive,
       pending,
       audioPrefs,
+      hotkeyBook,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -142,6 +149,9 @@ class Session extends ChangeNotifier {
 
   /// Microphone, speaker and voice processing for calls.
   final AudioPrefsBook audio;
+
+  /// Call shortcuts on this device.
+  final HotkeyBook hotkeys;
   Timer? _outboxTimer;
   bool _flushing = false;
   final Map<String, Future<Uint8List>> _emojiImages = {};
@@ -1263,6 +1273,7 @@ class Session extends ChangeNotifier {
     await dms.wipe();
     await outbox.wipe();
     await audio.wipe();
+    await hotkeys.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();

@@ -82,14 +82,20 @@ class _CallPageState extends State<CallPage> {
   final _ringback = RingTone.ringback();
   Timer? _ringbackLimit;
 
-  void _hangUp() {
-    unawaited(session.calls?.leave());
+  /// A hotkey or the call bar can end the call while this page shows.
+  void _closeWhenOver() {
+    if (!call.closed || !mounted) return;
+    call.removeListener(_closeWhenOver);
     Navigator.of(context).maybePop();
   }
+
+  /// The page closes once the call has ended; see [_closeWhenOver].
+  void _hangUp() => unawaited(session.calls?.leave());
 
   @override
   void initState() {
     super.initState();
+    call.addListener(_closeWhenOver);
     call.addListener(_syncRingback);
     _syncRingback();
     _ringbackLimit = Timer(const Duration(seconds: 15), _endRingback);
@@ -97,6 +103,7 @@ class _CallPageState extends State<CallPage> {
 
   @override
   void dispose() {
+    call.removeListener(_closeWhenOver);
     _endRingback();
     super.dispose();
   }
