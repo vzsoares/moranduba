@@ -86,6 +86,43 @@ void main() {
     expect(restarted.stateOf(bobId.publicKey), FriendState.friend);
   }, timeout: const Timeout(Duration(seconds: 60)));
 
+  test('DM history comes back from the device when no relay answers', () async {
+    final aliceId = Identity.generate();
+    final bobId = Identity.generate();
+    final bobStores = _memory();
+    final alice = await Session.start(
+      aliceId,
+      relays: _relays,
+      openStore: _memory(),
+    );
+    final bob = await Session.start(
+      bobId,
+      relays: _relays,
+      openStore: bobStores,
+    );
+    addTearDown(alice.close);
+
+    await alice.requestFriend(bobId.publicKey);
+    await _until(bob, () => bob.incomingRequests.contains(aliceId.publicKey));
+    await bob.acceptFriend(aliceId.publicKey);
+    await _until(alice, () => alice.friends.contains(bobId.publicKey));
+    await alice.sendText(bobId.publicKey, 'kept on the device');
+    await _until(bob, () => bob.chatWith(aliceId.publicKey).isNotEmpty);
+    await bob.close();
+
+    final offline = await Session.start(
+      bobId,
+      relays: const ['ws://localhost:1'],
+      openStore: bobStores,
+    );
+    addTearDown(offline.close);
+    expect(
+      offline.chatWith(aliceId.publicKey).single.content,
+      'kept on the device',
+    );
+    expect(offline.friends, contains(aliceId.publicKey));
+  });
+
   test('profiles reach friends, including pictures and edits', () async {
     final server = await FakeBlossom.start();
     addTearDown(server.close);

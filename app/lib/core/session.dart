@@ -13,6 +13,7 @@ import 'calls/sfu_client.dart';
 import 'emojis.dart';
 import 'expiry.dart';
 import 'friend_list.dart';
+import 'dm_archive.dart';
 import 'friend_protocol.dart';
 import 'gifs.dart';
 import 'groups/blossom.dart';
@@ -40,6 +41,7 @@ class Session extends ChangeNotifier {
     this.callLogs,
     this.emojis,
     this.gifs,
+    this.dms,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -81,6 +83,8 @@ class Session extends ChangeNotifier {
     await emojiBook.load();
     final gifBook = GifBook(await openStore('${identity.publicKey}-gifs'));
     await gifBook.load();
+    final dmArchive = DmArchive(await openStore('${identity.publicKey}-dms'));
+    await dmArchive.load();
     final session = Session._(
       identity,
       ndk,
@@ -93,6 +97,7 @@ class Session extends ChangeNotifier {
       logs,
       emojiBook,
       gifBook,
+      dmArchive,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -117,6 +122,7 @@ class Session extends ChangeNotifier {
   final CallLogBook callLogs;
   final EmojiBook emojis;
   final GifBook gifs;
+  final DmArchive dms;
   final Map<String, Future<Uint8List>> _emojiImages = {};
   late final SfuClient sfuClient = SfuClient(
     _ndk,
@@ -165,6 +171,10 @@ class Session extends ChangeNotifier {
       broadcastRelays: relays,
     );
     _storedFriends = await _friendList.load();
+    // History first, so it shows even when no relay answers.
+    for (final wrapped in dms.wraps) {
+      await _onWrapped(wrapped);
+    }
     final response = _ndk.requests.subscription(
       filter: Filter(
         kinds: [GiftWrap.kGiftWrapEventkind],
@@ -229,6 +239,7 @@ class Session extends ChangeNotifier {
       return;
     }
     if (!_seen.add(message.id)) return;
+    dms.put(message.id, wrapped);
     if (!message.isOutgoing &&
         message.createdAt >= _startedAt &&
         Control.of(message.rumor) == null) {
@@ -873,11 +884,14 @@ class Session extends ChangeNotifier {
       if (kind == 'group') {
         await groups?.prune(id, cutoff);
       } else {
-        final before = _messages[id]?.length ?? 0;
-        _messages[id]?.removeWhere(
-          (m) => m.createdAt < cutoff && Control.of(m.rumor) == null,
-        );
-        changed |= (_messages[id]?.length ?? 0) != before;
+        final expired = [
+          for (final m in _messages[id] ?? const <Nip17Message>[])
+            if (m.createdAt < cutoff && Control.of(m.rumor) == null) m.id,
+        ];
+        if (expired.isEmpty) continue;
+        _messages[id]?.removeWhere((m) => expired.contains(m.id));
+        dms.removeAll(expired);
+        changed = true;
       }
     }
     if (changed) notifyListeners();
@@ -1151,6 +1165,7 @@ class Session extends ChangeNotifier {
     await callLogs.wipe();
     await emojis.wipe();
     await gifs.wipe();
+    await dms.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
@@ -1172,6 +1187,7 @@ class Session extends ChangeNotifier {
       _saveTimer!.cancel();
       await _save();
     }
+    await dms.close();
     await _inbox?.cancel();
     final id = _subscriptionId;
     if (id != null) await _ndk.requests.closeSubscription(id);
