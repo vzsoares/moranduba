@@ -184,15 +184,7 @@ class _CallPageState extends State<CallPage> {
                     icon: const Icon(Icons.settings_voice_outlined),
                     onPressed: () => showAudioSettings(context, session),
                   ),
-                  _ModeSwitch(
-                    session: session,
-                    call: call,
-                    modes: [
-                      'mesh',
-                      if (session.serverOf(call.groupId) != null) 'server',
-                      if (session.hostsOf(call.groupId).isNotEmpty) 'host_peer',
-                    ],
-                  ),
+                  _ModeSwitch(session: session, call: call),
                   const SizedBox(width: 8),
                   IconButton(
                     tooltip: wide && _chatOpen ? 'Hide chat' : 'Chat',
@@ -253,17 +245,10 @@ class _CallPageState extends State<CallPage> {
 /// The mode badge; tapping it explains how the call is protected and
 /// carried, and moves everyone to another mode.
 class _ModeSwitch extends StatelessWidget {
-  const _ModeSwitch({
-    required this.session,
-    required this.call,
-    required this.modes,
-  });
+  const _ModeSwitch({required this.session, required this.call});
 
   final Session session;
   final GroupCall call;
-
-  /// Modes this group can use.
-  final List<String> modes;
 
   @override
   Widget build(BuildContext context) => Tooltip(
@@ -272,8 +257,7 @@ class _ModeSwitch extends StatelessWidget {
       borderRadius: BorderRadius.circular(4),
       onTap: () => showPanelSheet<void>(
         context,
-        builder: (_) =>
-            _CallInfoSheet(session: session, call: call, modes: modes),
+        builder: (_) => _CallInfoSheet(session: session, call: call),
       ),
       child: _ModeBadge(mode: call.mode),
     ),
@@ -312,19 +296,43 @@ const _modeInfo = {
 };
 
 class _CallInfoSheet extends StatelessWidget {
-  const _CallInfoSheet({
-    required this.session,
-    required this.call,
-    required this.modes,
-  });
+  const _CallInfoSheet({required this.session, required this.call});
 
   final Session session;
   final GroupCall call;
-  final List<String> modes;
+
+  bool _available(String mode) => switch (mode) {
+    'server' => session.serverOf(call.groupId) != null,
+    'host_peer' => session.hostsOf(call.groupId).isNotEmpty,
+    _ => true,
+  };
+
+  /// Opens the mode's settings when it has any, then moves everyone to it
+  /// once it can carry the call.
+  Future<void> _select(BuildContext context, String mode) async {
+    if (mode != 'mesh') {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => ServerDialog(session: session, groupId: call.groupId),
+      );
+    }
+    if (mode == call.mode || !_available(mode)) return;
+    if (!call.canSwitch || call.switching) return;
+    await call.switchMode(mode);
+  }
+
+  String _hint(String mode) {
+    if (mode == call.mode) return 'IN USE';
+    if (!_available(mode)) return 'Set up';
+    if (!call.canSwitch || call.switching) return '';
+    return 'Switch everyone';
+  }
 
   String _unavailable(String mode) => switch (mode) {
-    'server' => 'No call server set for this group.',
-    'host_peer' => 'Nobody hosts calls for this group.',
+    'server' => 'No call server set for this group. Tap to add one.',
+    'host_peer' =>
+      'Nobody hosts calls for this group. Tap to host from '
+          'a desktop.',
     _ => '',
   };
 
@@ -361,50 +369,57 @@ class _CallInfoSheet extends StatelessWidget {
                     for (final mode in _modeInfo.keys)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: Panel(
-                          color: mode == call.mode
-                              ? MangaColors.tone
-                              : MangaColors.paper,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
+                        child: Material(
+                          type: MaterialType.transparency,
+                          child: InkWell(
+                            borderRadius: MangaShape.borderRadius,
+                            onTap: mode == call.mode && mode == 'mesh'
+                                ? null
+                                : () => unawaited(_select(context, mode)),
+                            child: Panel(
+                              color: mode == call.mode
+                                  ? MangaColors.tone
+                                  : MangaColors.paper,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Expanded(
-                                    child: Text(
-                                      _modeInfo[mode]!.title,
-                                      style: text.titleSmall,
-                                    ),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          _modeInfo[mode]!.title,
+                                          style: text.titleSmall,
+                                        ),
+                                      ),
+                                      Text(_hint(mode), style: text.labelLarge),
+                                      if (mode != 'mesh') ...[
+                                        const SizedBox(width: 4),
+                                        const Icon(
+                                          Icons.chevron_right,
+                                          size: 18,
+                                        ),
+                                      ],
+                                    ],
                                   ),
-                                  if (mode == call.mode)
-                                    const Text('IN USE')
-                                  else if (!modes.contains(mode))
-                                    const SizedBox.shrink()
-                                  else if (call.canSwitch && !call.switching)
-                                    TextButton(
-                                      onPressed: () =>
-                                          unawaited(call.switchMode(mode)),
-                                      child: const Text('Switch everyone'),
+                                  const SizedBox(height: 4),
+                                  Text(_modeInfo[mode]!.about),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _available(mode)
+                                        ? _modeInfo[mode]!.limits
+                                        : _unavailable(mode),
+                                    style: text.bodySmall,
+                                  ),
+                                  if (mode == call.mode && sfu != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Server: ${Nip19.encodePubKey(sfu)}',
+                                      style: monoStyle.copyWith(fontSize: 11),
                                     ),
+                                  ],
                                 ],
                               ),
-                              const SizedBox(height: 4),
-                              Text(_modeInfo[mode]!.about),
-                              const SizedBox(height: 4),
-                              Text(
-                                modes.contains(mode)
-                                    ? _modeInfo[mode]!.limits
-                                    : _unavailable(mode),
-                                style: text.bodySmall,
-                              ),
-                              if (mode == call.mode && sfu != null) ...[
-                                const SizedBox(height: 4),
-                                SelectableText(
-                                  'Server: ${Nip19.encodePubKey(sfu)}',
-                                  style: monoStyle.copyWith(fontSize: 11),
-                                ),
-                              ],
-                            ],
+                            ),
                           ),
                         ),
                       ),
