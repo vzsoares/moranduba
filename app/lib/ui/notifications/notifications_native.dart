@@ -47,29 +47,29 @@ Future<void> load() async {
 
 Future<void> _init() async {
   if (_ready) return;
-  _ready =
-      await _plugin.initialize(
-        settings: const InitializationSettings(
-          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-          iOS: DarwinInitializationSettings(
-            requestAlertPermission: false,
-            requestBadgePermission: false,
-            requestSoundPermission: false,
-          ),
-          macOS: DarwinInitializationSettings(
-            requestAlertPermission: false,
-            requestBadgePermission: false,
-            requestSoundPermission: false,
-          ),
-          linux: LinuxInitializationSettings(defaultActionName: 'Open'),
-          windows: WindowsInitializationSettings(
-            appName: 'Moranduba',
-            appUserModelId: 'io.github.vzsoares.moranduba',
-            guid: '36ac646e-c066-4f21-bc6e-061f9e7a08d9',
-          ),
-        ),
-      ) ??
-      false;
+  final ok = await _plugin.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
+      macOS: DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
+      linux: LinuxInitializationSettings(defaultActionName: 'Open'),
+      windows: WindowsInitializationSettings(
+        appName: 'Moranduba',
+        appUserModelId: 'io.github.vzsoares.moranduba',
+        guid: '36ac646e-c066-4f21-bc6e-061f9e7a08d9',
+      ),
+    ),
+  );
+  // Darwin answers false when initialize asks for no permission.
+  _ready = ok == true || Platform.isIOS || Platform.isMacOS;
 }
 
 Future<bool> _permission() async {
