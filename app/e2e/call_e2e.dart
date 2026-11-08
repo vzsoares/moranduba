@@ -7,11 +7,14 @@
 // on push, so the SFU log shows push_subscribe and ring requests.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:web/web.dart' as web;
 import 'package:moranduba/core/calls/group_call.dart';
 import 'package:moranduba/core/calls/sfu_client.dart';
 import 'package:moranduba/core/groups/group_engine.dart';
@@ -244,6 +247,20 @@ Future<void> _bob() async {
     throw StateError('undeafen did not restore audio');
   }
   _log('deafen and back');
+
+  call.setMutedForMe(peer, true);
+  if (heard.any((t) => t.enabled)) throw StateError('mute for me left audio');
+  call.setMutedForMe(peer, false);
+  await call.setVolume(peer, .3);
+  final id = call.participants[peer]?.renderer?.textureId;
+  final element = web.document.getElementById('audio_RTCVideoRenderer-$id');
+  final volume = element?.getProperty<JSNumber>('volume'.toJS).toDartDouble;
+  if (heard.any((t) => !t.enabled) ||
+      volume == null ||
+      (volume - .3).abs() > .01) {
+    throw StateError('per-person audio not applied: volume $volume');
+  }
+  _log('per-person mute and volume');
 
   var last = await _framesFrom(call, peer);
   var still = DateTime.now();

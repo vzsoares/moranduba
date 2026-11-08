@@ -9,6 +9,7 @@ import 'call_signal.dart';
 import 'mesh_transport.dart';
 import 'screen_capture.dart';
 import 'transport.dart';
+import 'volume.dart';
 
 /// Above this many other participants, mesh stops sending camera video.
 const meshVideoCap = 4;
@@ -25,6 +26,11 @@ class CallParticipant {
   DateTime lastSeen = DateTime.now();
   MediaStream? stream;
   RTCVideoRenderer? renderer;
+
+  /// Our own choices about them; nobody else sees these.
+  bool mutedForMe = false;
+  double volume = 1;
+  bool videoHidden = false;
 }
 
 /// One call in one group: local media, the MLS-derived key, presence, and
@@ -317,19 +323,23 @@ class GroupCall extends ChangeNotifier implements CallHost {
     );
     if (p.stream?.id == stream.id) return;
     p.stream = stream;
-    if (deafened) _applyAudio();
+    _applyAudio();
     final renderer = p.renderer;
     if (renderer == null) {
       final created = RTCVideoRenderer();
       p.renderer = created;
       unawaited(
-        created.initialize().then((_) {
+        created.initialize().then((_) async {
           created.srcObject = stream;
+          if (p.volume != 1) await setPlaybackVolume(created, stream, p.volume);
           _notify();
         }),
       );
     } else {
       renderer.srcObject = stream;
+      if (p.volume != 1) {
+        unawaited(setPlaybackVolume(renderer, stream, p.volume));
+      }
     }
     _notify();
   }
@@ -381,13 +391,39 @@ class GroupCall extends ChangeNotifier implements CallHost {
     _notify();
   }
 
-  /// Plays each participant's audio unless we are deafened.
+  /// Plays each participant's audio unless we are deafened or muted them.
   void _applyAudio() {
     for (final p in participants.values) {
       for (final track in p.stream?.getAudioTracks() ?? <MediaStreamTrack>[]) {
-        track.enabled = !deafened;
+        track.enabled = !deafened && !p.mutedForMe;
       }
     }
+  }
+
+  /// Silences [pubkey] for us only.
+  void setMutedForMe(String pubkey, bool muted) {
+    final p = participants[pubkey];
+    if (p == null) return;
+    p.mutedForMe = muted;
+    _applyAudio();
+    _notify();
+  }
+
+  /// How loud [pubkey] plays for us, 0 to 1.
+  Future<void> setVolume(String pubkey, double volume) async {
+    final p = participants[pubkey];
+    if (p == null) return;
+    p.volume = volume;
+    _notify();
+    await setPlaybackVolume(p.renderer, p.stream, volume);
+  }
+
+  /// Stops showing [pubkey]'s camera or screen to us.
+  void setVideoHidden(String pubkey, bool hidden) {
+    final p = participants[pubkey];
+    if (p == null) return;
+    p.videoHidden = hidden;
+    _notify();
   }
 
   /// Unmuting while deafened undeafens too.

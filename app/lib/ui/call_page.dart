@@ -305,8 +305,9 @@ class _Tiles extends StatelessWidget {
           label: session.displayName(p.pubkey),
           avatar: PersonAvatar(session: session, pubkey: p.pubkey, size: 96),
           renderer: p.renderer,
-          showVideo: p.media.video || p.media.screen,
-          muted: !p.media.audio,
+          showVideo: (p.media.video || p.media.screen) && !p.videoHidden,
+          muted: !p.media.audio || p.mutedForMe,
+          onTap: () => _showPersonControls(context, session, call, p.pubkey),
           note: switch (p.state) {
             'connected' => p.media.screen ? 'Sharing screen' : null,
             final state => state == 'new' ? 'Connecting…' : state,
@@ -362,10 +363,14 @@ class _Tile extends StatelessWidget {
     required this.muted,
     this.mirror = false,
     this.note,
+    this.onTap,
   });
 
   final String label;
   final Widget avatar;
+
+  /// Opens per-person controls; null for our own tile.
+  final VoidCallback? onTap;
   final RTCVideoRenderer? renderer;
   final bool showVideo;
   final bool muted;
@@ -375,7 +380,7 @@ class _Tile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final video = renderer;
-    return DecoratedBox(
+    final tile = DecoratedBox(
       decoration: BoxDecoration(
         color: MangaColors.charcoal,
         borderRadius: MangaShape.borderRadius,
@@ -431,8 +436,79 @@ class _Tile extends StatelessWidget {
         ),
       ),
     );
+    final tap = onTap;
+    if (tap == null) return tile;
+    return Tooltip(
+      message: 'Volume, mute and video for $label',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(onTap: tap, child: tile),
+      ),
+    );
   }
 }
+
+/// Mute, volume and video for one person, for us only.
+Future<void> _showPersonControls(
+  BuildContext context,
+  Session session,
+  GroupCall call,
+  String pubkey,
+) => showPanelSheet<void>(
+  context,
+  builder: (_) => ListenableBuilder(
+    listenable: call,
+    builder: (context, _) {
+      final p = call.participants[pubkey];
+      if (p == null) return const SizedBox.shrink();
+      return SafeArea(
+        child: Center(
+          heightFactor: 1,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    session.displayName(pubkey).toUpperCase(),
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  const Text('Only you hear and see these changes.'),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    title: const Text('Mute for me'),
+                    value: p.mutedForMe,
+                    onChanged: (on) => call.setMutedForMe(pubkey, on),
+                  ),
+                  ListTile(
+                    title: const Text('Volume'),
+                    subtitle: Slider(
+                      value: p.volume,
+                      divisions: 20,
+                      label: '${(p.volume * 100).round()}%',
+                      onChanged: p.mutedForMe
+                          ? null
+                          : (v) => call.setVolume(pubkey, v),
+                    ),
+                  ),
+                  SwitchListTile(
+                    title: const Text('Hide video and screen share'),
+                    value: p.videoHidden,
+                    onChanged: (on) => call.setVideoHidden(pubkey, on),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  ),
+);
 
 class _Label extends StatelessWidget {
   const _Label(String this.text) : icon = null;
