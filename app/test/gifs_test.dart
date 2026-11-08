@@ -1,4 +1,8 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:moranduba/core/gifs.dart';
 import 'package:moranduba/core/groups/mls_bridge.dart';
 import 'package:moranduba/core/profiles.dart';
@@ -36,5 +40,38 @@ void main() {
     }
     expect(book.all.length, GifBook.max);
     expect(book.all.first.sha256, '${GifBook.max + 4}');
+  });
+
+  test('GIF links must be http(s), a GIF, and under the cap', () async {
+    final gif = Uint8List.fromList([...'GIF89a'.codeUnits, 0, 0]);
+    final client = MockClient(
+      (request) async => switch (request.url.path) {
+        '/ok.gif' => http.Response.bytes(gif, 200),
+        '/page' => http.Response('<html>', 200),
+        '/big.gif' => http.Response.bytes(
+          Uint8List(maxGifBytes + 1)..setAll(0, gif),
+          200,
+        ),
+        _ => http.Response('', 404),
+      },
+    );
+    expect(await fetchGif(' https://x.example/ok.gif ', client: client), gif);
+    for (final (link, message) in [
+      ('ftp://x.example/a.gif', 'https://'),
+      ('https://x.example/page', 'not a GIF'),
+      ('https://x.example/big.gif', '8 MB'),
+      ('https://x.example/gone.gif', '404'),
+    ]) {
+      await expectLater(
+        fetchGif(link, client: client),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains(message),
+          ),
+        ),
+      );
+    }
   });
 }

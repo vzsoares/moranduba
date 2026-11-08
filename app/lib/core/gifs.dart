@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
 
 import 'groups/mls_bridge.dart';
 import 'profiles.dart';
@@ -69,4 +72,40 @@ class GifBook {
   );
 
   Future<void> wipe() => _store.delete();
+}
+
+/// Saved GIFs stay under this.
+const maxGifBytes = 8 * 1024 * 1024;
+
+/// Downloads a GIF from [link]. Throws [FormatException] with a message
+/// for people when it is not an http(s) link to a GIF under [maxGifBytes].
+Future<Uint8List> fetchGif(String link, {http.Client? client}) async {
+  final url = Uri.tryParse(link.trim());
+  if (url == null ||
+      !{'http', 'https'}.contains(url.scheme) ||
+      url.host.isEmpty) {
+    throw const FormatException('Paste a link that starts with https://');
+  }
+  final http.Response response;
+  try {
+    response = await (client ?? http.Client()).get(url);
+  } on http.ClientException {
+    // Browsers also land here when the site does not allow cross-origin use.
+    throw const FormatException(
+      'Could not download it. Some sites block that; save the GIF and use '
+      'Add GIF instead.',
+    );
+  }
+  if (response.statusCode != 200) {
+    throw FormatException('The site answered ${response.statusCode}.');
+  }
+  final bytes = response.bodyBytes;
+  if (bytes.length > maxGifBytes) {
+    throw const FormatException('GIFs must be under 8 MB.');
+  }
+  if (bytes.length < 6 ||
+      ascii.decode(bytes.sublist(0, 4), allowInvalid: true) != 'GIF8') {
+    throw const FormatException('That link is not a GIF.');
+  }
+  return bytes;
 }

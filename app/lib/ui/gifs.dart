@@ -9,8 +9,6 @@ import '../core/session.dart';
 import 'manga.dart';
 import 'theme.dart';
 
-const _maxGifBytes = 8 * 1024 * 1024;
-
 /// The composer's GIF panel: the GIFs saved on this device. A picked GIF
 /// goes out as an encrypted attachment.
 class GifPanel extends StatelessWidget {
@@ -62,7 +60,7 @@ class _SavedGifsState extends State<_SavedGifs> {
     );
     if (file == null) return;
     final bytes = await file.readAsBytes();
-    if (bytes.length > _maxGifBytes) {
+    if (bytes.length > maxGifBytes) {
       messenger.showSnackBar(
         const SnackBar(content: Text('GIFs must be under 8 MB.')),
       );
@@ -71,6 +69,25 @@ class _SavedGifsState extends State<_SavedGifs> {
     setState(() => _adding = true);
     try {
       await session.saveGif(bytes);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Not saved: $e')));
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+  }
+
+  Future<void> _addFromUrl() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final link = await showDialog<String>(
+      context: context,
+      builder: (_) => const _UrlDialog(),
+    );
+    if (link == null || !mounted) return;
+    setState(() => _adding = true);
+    try {
+      await session.saveGif(await fetchGif(link));
+    } on FormatException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Not saved: $e')));
     } finally {
@@ -87,8 +104,20 @@ class _SavedGifsState extends State<_SavedGifs> {
         builder: (context, constraints) => GridView.builder(
           padding: const EdgeInsets.all(8),
           gridDelegate: _grid(constraints.maxWidth),
-          itemCount: gifs.length + 1,
+          itemCount: gifs.length + 2,
           itemBuilder: (context, index) {
+            if (index == 1) {
+              return _Tile(
+                tooltip: 'Save a GIF from a link',
+                onTap: _adding ? null : _addFromUrl,
+                child: const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [Icon(Icons.link), Text('From URL')],
+                  ),
+                ),
+              );
+            }
             if (index == 0) {
               return _Tile(
                 tooltip: 'Save a GIF from this device',
@@ -103,7 +132,7 @@ class _SavedGifsState extends State<_SavedGifs> {
                 ),
               );
             }
-            final gif = gifs[index - 1];
+            final gif = gifs[index - 2];
             return _SavedGifTile(
               key: ValueKey(gif.sha256),
               session: session,
@@ -182,6 +211,49 @@ class _SavedGifTileState extends State<_SavedGifTile> {
         },
       );
     },
+  );
+}
+
+class _UrlDialog extends StatefulWidget {
+  const _UrlDialog();
+
+  @override
+  State<_UrlDialog> createState() => _UrlDialogState();
+}
+
+class _UrlDialogState extends State<_UrlDialog> {
+  final _link = TextEditingController();
+
+  @override
+  void dispose() {
+    _link.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('GIF FROM A LINK'),
+    content: SizedBox(
+      width: 420,
+      child: LabeledField(
+        label: 'Link to a .gif',
+        hint: 'https://…',
+        controller: _link,
+        monospace: true,
+        autofocus: true,
+        onSubmitted: (link) => Navigator.of(context).pop(link),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.of(context).pop(_link.text),
+        child: const Text('Save'),
+      ),
+    ],
   );
 }
 
