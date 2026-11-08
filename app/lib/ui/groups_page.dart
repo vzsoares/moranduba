@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../core/calls/call_log.dart';
+import '../core/expiry.dart';
+import '../core/friend_protocol.dart';
 import '../core/groups/group_engine.dart';
 import '../core/groups/groups.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
-import '../core/calls/call_log.dart';
-import '../core/expiry.dart';
 import 'call_page.dart';
+import 'chat_page.dart';
 import 'expiry_button.dart';
 import 'group_conversation.dart';
 import 'manga.dart';
@@ -447,6 +449,69 @@ class _MembersSheetState extends State<_MembersSheet> {
     if (added == true) setState(() => _members = _load());
   }
 
+  String _relation(String pubkey) => switch (widget.session.stateOf(pubkey)) {
+    FriendState.friend => 'Message',
+    FriendState.outgoing => 'Friend request sent',
+    FriendState.incoming => 'Wants to be friends',
+    FriendState.none => 'Add as friend to message',
+  };
+
+  /// Friends open their DM; anyone else gets a friend request first, since
+  /// DMs go only between friends.
+  Future<void> _open(String pubkey) async {
+    final session = widget.session;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    switch (session.stateOf(pubkey)) {
+      case FriendState.friend:
+        navigator.pop();
+        await navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => ChatPage(session: session, peer: pubkey),
+          ),
+        );
+      case FriendState.outgoing:
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Waiting for them to accept your friend request.'),
+          ),
+        );
+      case FriendState.incoming:
+        await session.acceptFriend(pubkey);
+        if (mounted) setState(() {});
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Friends now. Tap again to message.')),
+        );
+      case FriendState.none:
+        final send = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('ADD AS FRIEND?'),
+            content: Text(
+              'Messages go only between friends. Send '
+              '${session.displayName(pubkey)} a friend request?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Send request'),
+              ),
+            ],
+          ),
+        );
+        if (send != true) return;
+        await session.requestFriend(pubkey);
+        if (mounted) setState(() {});
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Friend request sent.')),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
@@ -484,9 +549,13 @@ class _MembersSheetState extends State<_MembersSheet> {
                               pubkey: pubkey,
                             ),
                             line: [
-                              if (pubkey == me) 'You',
                               if (widget.info.admins.contains(pubkey)) 'Admin',
+                              if (pubkey != me) _relation(pubkey),
                             ].join(' · '),
+                            trailing: pubkey == me
+                                ? null
+                                : const Icon(Icons.chevron_right),
+                            onTap: pubkey == me ? null : () => _open(pubkey),
                           ),
                         ),
                     const SizedBox(height: 12),
