@@ -10,11 +10,15 @@ class PendingMessage {
     required this.chat,
     required this.text,
     required this.createdAt,
+    this.tags = const [],
   });
 
   final String id;
   final String chat;
   final String text;
+
+  /// Extra rumor tags, such as a friend acceptance's control tag.
+  final List<List<String>> tags;
 
   /// Unix seconds, when it was typed.
   final int createdAt;
@@ -24,6 +28,7 @@ class PendingMessage {
     'chat': chat,
     'text': text,
     'created_at': createdAt,
+    if (tags.isNotEmpty) 'tags': tags,
   };
 
   static PendingMessage? fromJson(Object? json) => switch (json) {
@@ -33,9 +38,21 @@ class PendingMessage {
       'text': final String text,
       'created_at': final int createdAt,
     } =>
-      PendingMessage(id: id, chat: chat, text: text, createdAt: createdAt),
+      PendingMessage(
+        id: id,
+        chat: chat,
+        text: text,
+        createdAt: createdAt,
+        tags: _tags(json['tags']),
+      ),
     _ => null,
   };
+
+  static List<List<String>> _tags(Object? json) => [
+    if (json is List<Object?>)
+      for (final tag in json)
+        if (tag is List<Object?>) tag.whereType<String>().toList(),
+  ];
 }
 
 /// Messages waiting for a relay, oldest first, kept across restarts.
@@ -60,7 +77,11 @@ class Outbox {
     }
   }
 
-  Future<PendingMessage> add(String chat, String text) async {
+  Future<PendingMessage> add(
+    String chat,
+    String text, {
+    List<List<String>> tags = const [],
+  }) async {
     final random = Random.secure();
     final item = PendingMessage(
       id: [
@@ -70,6 +91,7 @@ class Outbox {
       chat: chat,
       text: text,
       createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      tags: tags,
     );
     _items.add(item);
     await _save();

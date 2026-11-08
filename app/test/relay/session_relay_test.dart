@@ -175,6 +175,45 @@ void main() {
     await _until(online, () => online.outbox.all.isEmpty);
   });
 
+  test('an acceptance with no relay waits, then reaches them', () async {
+    final aliceId = Identity.generate();
+    final bobId = Identity.generate();
+    final bobStores = _memory();
+    final alice = await Session.start(
+      aliceId,
+      relays: _relays,
+      openStore: _memory(),
+    );
+    addTearDown(alice.close);
+    final bob = await Session.start(
+      bobId,
+      relays: _relays,
+      openStore: bobStores,
+    );
+    await alice.requestFriend(bobId.publicKey);
+    await _until(bob, () => bob.incomingRequests.contains(aliceId.publicKey));
+    await bob.close();
+
+    final offline = await Session.start(
+      bobId,
+      relays: const ['ws://localhost:1'],
+      openStore: bobStores,
+    );
+    await offline.acceptFriend(aliceId.publicKey);
+    expect(offline.stateOf(aliceId.publicKey), FriendState.friend);
+    expect(offline.outbox.inChat(dmChat(aliceId.publicKey)), hasLength(1));
+    await offline.close();
+
+    final online = await Session.start(
+      bobId,
+      relays: _relays,
+      openStore: bobStores,
+    );
+    addTearDown(online.close);
+    await _until(alice, () => alice.friends.contains(bobId.publicKey));
+    await _until(online, () => online.outbox.all.isEmpty);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
   test('profiles reach friends, including pictures and edits', () async {
     final server = await FakeBlossom.start();
     addTearDown(server.close);

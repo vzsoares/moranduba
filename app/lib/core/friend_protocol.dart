@@ -21,8 +21,10 @@ enum Control {
     [tagName, wire],
   ];
 
-  static Control? of(Nip01Event rumor) {
-    for (final tag in rumor.tags) {
+  static Control? of(Nip01Event rumor) => ofTags(rumor.tags);
+
+  static Control? ofTags(List<List<String>> tags) {
+    for (final tag in tags) {
       if (tag.length < 2 || tag[0] != tagName) continue;
       for (final control in values) {
         if (control.wire == tag[1]) return control;

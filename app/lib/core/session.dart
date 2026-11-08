@@ -1055,29 +1055,43 @@ class Session extends ChangeNotifier {
   Future<void> sendToGroup(String groupId, String text) =>
       _sendOrQueue(groupChat(groupId), text);
 
-  Future<void> _sendOrQueue(String chat, String text) async {
+  Future<void> _sendOrQueue(
+    String chat,
+    String text, {
+    List<List<String>> tags = const [],
+  }) async {
     // Behind anything already waiting, so the order holds.
     if (outbox.inChat(chat).isEmpty) {
       try {
-        await _deliver(chat, text);
+        await _deliver(chat, text, tags);
         return;
       } catch (e) {
         debugPrint('queued for later: $e');
       }
     }
-    await outbox.add(chat, text);
+    await outbox.add(chat, text, tags: tags);
     notifyListeners();
     _retryOutboxSoon();
   }
 
-  Future<void> _deliver(String chat, String text) {
+  Future<void> _deliver(
+    String chat,
+    String text, [
+    List<List<String>> tags = const [],
+  ]) {
     final [kind, id] = chat.split(':');
     if (kind == 'group') {
       final g = groups;
       if (g == null) throw StateError('Groups are not up yet');
       return g.send(id, text, expiresAt: _expiresAt(chat));
     }
-    return _send(id, text, const [], expiresAt: _expiresAt(chat));
+    // Control messages must outlive the chat's disappearing timer.
+    return _send(
+      id,
+      text,
+      tags,
+      expiresAt: tags.isEmpty ? _expiresAt(chat) : null,
+    );
   }
 
   /// Whether [chat] can still take messages: we left no group, unfriended
@@ -1103,9 +1117,14 @@ class Session extends ChangeNotifier {
     _flushing = true;
     try {
       for (final pending in outbox.all) {
+        // Queued offline, the friend list may never have reached a relay.
+        if (Control.ofTags(pending.tags) == Control.friendAccept) {
+          final [_, peer] = pending.chat.split(':');
+          if (_storedFriends.add(peer)) _scheduleSave();
+        }
         if (_reachable(pending.chat)) {
           try {
-            await _deliver(pending.chat, pending.text);
+            await _deliver(pending.chat, pending.text, pending.tags);
           } catch (e) {
             _retryOutboxSoon();
             return;
@@ -1247,15 +1266,17 @@ class Session extends ChangeNotifier {
     }
   }
 
+  /// Friends locally at once; the acceptance waits in [outbox] until a
+  /// relay takes it, so a failed send cannot leave them waiting forever.
   Future<void> acceptFriend(String pubkey) async {
-    await _send(
-      pubkey,
-      'Accepted your friend request',
-      Control.friendAccept.tags,
-    );
     if (_storedFriends.add(pubkey)) _scheduleSave();
-    _shareProfileSoon();
     notifyListeners();
+    await _sendOrQueue(
+      dmChat(pubkey),
+      'Accepted your friend request',
+      tags: Control.friendAccept.tags,
+    );
+    _shareProfileSoon();
   }
 
   void declineFriend(String pubkey) {
