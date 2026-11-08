@@ -11,6 +11,8 @@ class Composer extends StatefulWidget {
     required this.onSend,
     this.onAttach,
     this.customEmojis,
+    this.onGif,
+    this.gifs,
   });
 
   final Future<void> Function(String text) onSend;
@@ -20,6 +22,15 @@ class Composer extends StatefulWidget {
 
   /// A second emoji tab (the group's own), given a way to insert text.
   final Widget Function(ValueChanged<String> insert)? customEmojis;
+
+  /// Sends a picked GIF; with [gifs], shows a GIF button.
+  final Future<void> Function(Uint8List bytes, String filename)? onGif;
+
+  /// The GIF panel, given how to send a pick.
+  final Widget Function(
+    Future<void> Function(Uint8List bytes, String filename) send,
+  )?
+  gifs;
 
   @override
   State<Composer> createState() => _ComposerState();
@@ -31,6 +42,7 @@ class _ComposerState extends State<Composer> {
   bool _sending = false;
   bool _attaching = false;
   bool _emojis = false;
+  bool _gifs = false;
 
   @override
   void dispose() {
@@ -126,6 +138,17 @@ class _ComposerState extends State<Composer> {
     );
   }
 
+  Future<void> _sendGif(Uint8List bytes, String filename) async {
+    final send = widget.onGif;
+    if (send == null) return;
+    setState(() => _gifs = false);
+    try {
+      await send(bytes, filename);
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
   Future<void> _attach(Future<void> Function() attach) async {
     setState(() => _attaching = true);
     try {
@@ -148,6 +171,7 @@ class _ComposerState extends State<Composer> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (_emojis) _emojiPanel(),
+          if (_gifs) ?widget.gifs?.call(_sendGif),
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
             child: Row(
@@ -157,8 +181,22 @@ class _ComposerState extends State<Composer> {
                   isSelected: _emojis,
                   icon: const Icon(Icons.emoji_emotions_outlined),
                   selectedIcon: const Icon(Icons.emoji_emotions),
-                  onPressed: () => setState(() => _emojis = !_emojis),
+                  onPressed: () => setState(() {
+                    _emojis = !_emojis;
+                    _gifs = false;
+                  }),
                 ),
+                if (widget.gifs != null && widget.onGif != null)
+                  IconButton(
+                    tooltip: _gifs ? 'Close GIFs' : 'GIFs',
+                    isSelected: _gifs,
+                    icon: const Icon(Icons.gif_box_outlined),
+                    selectedIcon: const Icon(Icons.gif_box),
+                    onPressed: () => setState(() {
+                      _gifs = !_gifs;
+                      _emojis = false;
+                    }),
+                  ),
                 if (widget.onAttach case final attach?) ...[
                   IconButton(
                     tooltip: 'Attach a file',

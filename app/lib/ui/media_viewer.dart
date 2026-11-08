@@ -40,6 +40,24 @@ class _MediaViewerState extends State<_MediaViewer> {
 
   MediaKind get _kind => mediaKind(widget.media.mime);
 
+  Future<void> _saveGif(
+    Future<void> Function(Uint8List bytes) save,
+    Uint8List bytes,
+  ) async {
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await save(bytes);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Saved to My GIFs.')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not save: $e')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Future<void> _download(Uint8List bytes) async {
     setState(() => _saving = true);
     final messenger = ScaffoldMessenger.of(context);
@@ -97,6 +115,19 @@ class _MediaViewerState extends State<_MediaViewer> {
                       if (bytes != null) ...[
                         Text(_formatSize(bytes.length), style: text.bodySmall),
                         const SizedBox(width: 12),
+                        if ((widget.media.mime, widget.media.saveGif) case (
+                          'image/gif',
+                          final save?,
+                        )) ...[
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.gif_box_outlined, size: 18),
+                            label: const Text('Save to My GIFs'),
+                            onPressed: _saving
+                                ? null
+                                : () => _saveGif(save, bytes),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         FilledButton.icon(
                           icon: const Icon(Icons.download, size: 18),
                           label: Text(_saving ? 'Saving…' : 'Download'),

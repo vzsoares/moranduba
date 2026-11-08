@@ -16,6 +16,7 @@ class Attachment {
     required this.load,
     this.width,
     this.height,
+    this.saveGif,
   });
 
   /// Stable across rebuilds, such as the plaintext hash.
@@ -27,6 +28,9 @@ class Attachment {
   final Future<Uint8List> Function() load;
   final int? width;
   final int? height;
+
+  /// Keeps a GIF in My GIFs; the viewer offers it for GIFs when set.
+  final Future<void> Function(Uint8List bytes)? saveGif;
 
   bool get isImage => mime.startsWith('image/');
 }

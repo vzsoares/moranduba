@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:ndk/ndk.dart';
 
@@ -9,11 +10,11 @@ import 'calls/calls.dart';
 import 'calls/host_peer.dart';
 import 'calls/sfu_book.dart';
 import 'calls/sfu_client.dart';
-import 'push/push.dart';
 import 'emojis.dart';
 import 'expiry.dart';
 import 'friend_list.dart';
 import 'friend_protocol.dart';
+import 'gifs.dart';
 import 'groups/blossom.dart';
 import 'groups/group_engine.dart';
 import 'groups/groups.dart';
@@ -21,6 +22,7 @@ import 'groups/mls_bridge.dart';
 import 'groups/mls_platform.dart';
 import 'identity.dart';
 import 'profiles.dart';
+import 'push/push.dart';
 import 'relays.dart';
 
 /// One logged-in identity: relay connection, DM inbox, friendships and
@@ -37,6 +39,7 @@ class Session extends ChangeNotifier {
     this.servers,
     this.callLogs,
     this.emojis,
+    this.gifs,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -76,6 +79,8 @@ class Session extends ChangeNotifier {
       await openStore('${identity.publicKey}-emojis'),
     );
     await emojiBook.load();
+    final gifBook = GifBook(await openStore('${identity.publicKey}-gifs'));
+    await gifBook.load();
     final session = Session._(
       identity,
       ndk,
@@ -87,6 +92,7 @@ class Session extends ChangeNotifier {
       sfus,
       logs,
       emojiBook,
+      gifBook,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -110,6 +116,7 @@ class Session extends ChangeNotifier {
   final SfuBook servers;
   final CallLogBook callLogs;
   final EmojiBook emojis;
+  final GifBook gifs;
   final Map<String, Future<Uint8List>> _emojiImages = {};
   late final SfuClient sfuClient = SfuClient(
     _ndk,
@@ -584,6 +591,29 @@ class Session extends ChangeNotifier {
   }
 
   /// The decrypted image of [picture], fetched once per session.
+  /// Keeps [bytes] in this device's GIFs; a GIF already there moves to
+  /// the front.
+  Future<void> saveGif(Uint8List bytes) async {
+    final hash = sha256.convert(bytes).toString();
+    final known = gifs.all.where((g) => g.sha256 == hash).firstOrNull;
+    if (known != null) {
+      await gifs.add(known);
+    } else {
+      final (sealed, finish) = await encryptPicture(bytes, 'image/gif');
+      final picture = finish(await _blossom.upload(sealed));
+      await gifs.add(SavedGif(picture: picture, sha256: hash));
+    }
+    notifyListeners();
+  }
+
+  Future<void> forgetGif(SavedGif gif) async {
+    await gifs.remove(gif.sha256);
+    notifyListeners();
+  }
+
+  /// A saved GIF's bytes; shares the emoji picture cache.
+  Future<Uint8List> gifImage(SavedGif gif) => emojiImage(gif.picture);
+
   Future<Uint8List> emojiImage(PictureRef picture) {
     final cached = _emojiImages[picture.url];
     if (cached != null) return cached;
@@ -1120,6 +1150,7 @@ class Session extends ChangeNotifier {
     await servers.wipe();
     await callLogs.wipe();
     await emojis.wipe();
+    await gifs.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();

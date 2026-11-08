@@ -8,6 +8,7 @@ import '../core/session.dart';
 import 'attachments.dart';
 import 'chat_page.dart';
 import 'composer.dart';
+import 'gifs.dart';
 import 'emoji.dart';
 import 'manga.dart';
 
@@ -39,6 +40,13 @@ class GroupConversation extends StatelessWidget {
         Composer(
           onSend: (text) => session.sendToGroup(groupId, text),
           onAttach: _sendAttachment,
+          onGif: (bytes, filename) => session.sendFileToGroup(
+            groupId,
+            bytes,
+            mime: 'image/gif',
+            filename: filename,
+          ),
+          gifs: (send) => GifPanel(session: session, onSend: send),
           customEmojis: (insert) => GroupEmojiGrid(
             session: session,
             groupId: groupId,
@@ -117,6 +125,7 @@ class _Messages extends StatelessWidget {
                   width: media.width,
                   height: media.height,
                   load: () => groups.media(groupId, media),
+                  saveGif: session.saveGif,
                 ),
               ),
           ],

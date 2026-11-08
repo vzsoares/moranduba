@@ -6,6 +6,7 @@ import '../core/groups/media_types.dart';
 import '../core/session.dart';
 import 'attachments.dart';
 import 'composer.dart';
+import 'gifs.dart';
 import 'expiry_button.dart';
 import 'manga.dart';
 import 'people.dart';
@@ -80,6 +81,7 @@ class ChatPage extends StatelessWidget {
                               filename: dmFileName(m),
                               mime: file.mimeType,
                               load: () => session.dmFile(m),
+                              saveGif: session.saveGif,
                             ),
                           ),
                       ],
@@ -92,6 +94,13 @@ class ChatPage extends StatelessWidget {
           Composer(
             onSend: (text) => session.sendText(peer, text),
             onAttach: _sendAttachment,
+            onGif: (bytes, filename) => session.sendFile(
+              peer,
+              bytes,
+              mime: 'image/gif',
+              filename: filename,
+            ),
+            gifs: (send) => GifPanel(session: session, onSend: send),
           ),
         ],
       ),
