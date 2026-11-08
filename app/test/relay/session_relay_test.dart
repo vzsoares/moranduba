@@ -123,6 +123,54 @@ void main() {
     expect(offline.friends, contains(aliceId.publicKey));
   });
 
+  test('text typed with no relay waits, then goes out in order', () async {
+    final aliceId = Identity.generate();
+    final bobId = Identity.generate();
+    final aliceStores = _memory();
+    final alice = await Session.start(
+      aliceId,
+      relays: _relays,
+      openStore: aliceStores,
+    );
+    final bob = await Session.start(
+      bobId,
+      relays: _relays,
+      openStore: _memory(),
+    );
+    addTearDown(bob.close);
+    await alice.requestFriend(bobId.publicKey);
+    await _until(bob, () => bob.incomingRequests.contains(aliceId.publicKey));
+    await bob.acceptFriend(aliceId.publicKey);
+    await _until(alice, () => alice.friends.contains(bobId.publicKey));
+    await alice.close();
+
+    final offline = await Session.start(
+      aliceId,
+      relays: const ['ws://localhost:1'],
+      openStore: aliceStores,
+    );
+    await offline.sendText(bobId.publicKey, 'one');
+    await offline.sendText(bobId.publicKey, 'two');
+    expect(
+      [for (final p in offline.outbox.inChat(dmChat(bobId.publicKey))) p.text],
+      ['one', 'two'],
+    );
+    await offline.close();
+
+    final online = await Session.start(
+      aliceId,
+      relays: _relays,
+      openStore: aliceStores,
+    );
+    addTearDown(online.close);
+    await _until(bob, () => bob.chatWith(aliceId.publicKey).length == 2);
+    expect(
+      [for (final m in bob.chatWith(aliceId.publicKey)) m.content],
+      ['one', 'two'],
+    );
+    await _until(online, () => online.outbox.all.isEmpty);
+  });
+
   test('profiles reach friends, including pictures and edits', () async {
     final server = await FakeBlossom.start();
     addTearDown(server.close);

@@ -51,7 +51,8 @@ class ChatPage extends StatelessWidget {
               listenable: session,
               builder: (context, _) {
                 final messages = session.chatWith(peer);
-                if (messages.isEmpty) {
+                final pending = session.outbox.inChat(dmChat(peer));
+                if (messages.isEmpty && pending.isEmpty) {
                   return const EmptyState(
                     icon: Icons.forum_outlined,
                     title: 'SAY HI',
@@ -66,8 +67,16 @@ class ChatPage extends StatelessWidget {
                     horizontal: 24,
                     vertical: 16,
                   ),
-                  itemCount: messages.length,
+                  itemCount: pending.length + messages.length,
                   itemBuilder: (context, index) {
+                    if (index < pending.length) {
+                      return MessageRow(
+                        text: pending[pending.length - 1 - index].text,
+                        outgoing: true,
+                        pending: true,
+                      );
+                    }
+                    index -= pending.length;
                     final m = messages[messages.length - 1 - index];
                     final file = m.fileMetadata;
                     return MessageRow(
@@ -129,10 +138,14 @@ class MessageRow extends StatelessWidget {
     this.speaker,
     this.attachments = const [],
     this.richText,
+    this.pending = false,
   });
 
   final String text;
   final bool outgoing;
+
+  /// No relay took it yet; the outbox sends it again.
+  final bool pending;
   final String? speaker;
   final List<Widget> attachments;
   final InlineSpan Function(TextStyle? style)? richText;
@@ -161,10 +174,28 @@ class MessageRow extends StatelessWidget {
                   child: attachment,
                 ),
               if (text.isNotEmpty)
-                SpeechBubble(
-                  text: text,
-                  outgoing: outgoing,
-                  richText: richText,
+                Opacity(
+                  opacity: pending ? .55 : 1,
+                  child: SpeechBubble(
+                    text: text,
+                    outgoing: outgoing,
+                    richText: richText,
+                  ),
+                ),
+              if (pending)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, right: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.schedule, size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Waiting for a relay',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
                 ),
             ],
           ),

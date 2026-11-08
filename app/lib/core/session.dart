@@ -22,6 +22,7 @@ import 'groups/groups.dart';
 import 'groups/mls_bridge.dart';
 import 'groups/mls_platform.dart';
 import 'identity.dart';
+import 'outbox.dart';
 import 'profiles.dart';
 import 'push/push.dart';
 import 'relays.dart';
@@ -42,6 +43,7 @@ class Session extends ChangeNotifier {
     this.emojis,
     this.gifs,
     this.dms,
+    this.outbox,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -85,6 +87,8 @@ class Session extends ChangeNotifier {
     await gifBook.load();
     final dmArchive = DmArchive(await openStore('${identity.publicKey}-dms'));
     await dmArchive.load();
+    final pending = Outbox(await openStore('${identity.publicKey}-outbox'));
+    await pending.load();
     final session = Session._(
       identity,
       ndk,
@@ -98,11 +102,13 @@ class Session extends ChangeNotifier {
       emojiBook,
       gifBook,
       dmArchive,
+      pending,
     );
     await session._init();
     if (openGroupEngine != null) {
       await session._startGroups(openGroupEngine, files);
     }
+    unawaited(session._flushOutbox());
     session._shareProfileSoon();
     session._pruneTimer = Timer.periodic(
       const Duration(seconds: 30),
@@ -123,6 +129,11 @@ class Session extends ChangeNotifier {
   final EmojiBook emojis;
   final GifBook gifs;
   final DmArchive dms;
+
+  /// Text that no relay took yet; sent again in order.
+  final Outbox outbox;
+  Timer? _outboxTimer;
+  bool _flushing = false;
   final Map<String, Future<Uint8List>> _emojiImages = {};
   late final SfuClient sfuClient = SfuClient(
     _ndk,
@@ -897,8 +908,73 @@ class Session extends ChangeNotifier {
     if (changed) notifyListeners();
   }
 
+  /// Queues the text when no relay takes it; see [outbox].
   Future<void> sendToGroup(String groupId, String text) =>
-      groups!.send(groupId, text, expiresAt: _expiresAt(groupChat(groupId)));
+      _sendOrQueue(groupChat(groupId), text);
+
+  Future<void> _sendOrQueue(String chat, String text) async {
+    // Behind anything already waiting, so the order holds.
+    if (outbox.inChat(chat).isEmpty) {
+      try {
+        await _deliver(chat, text);
+        return;
+      } catch (e) {
+        debugPrint('queued for later: $e');
+      }
+    }
+    await outbox.add(chat, text);
+    notifyListeners();
+    _retryOutboxSoon();
+  }
+
+  Future<void> _deliver(String chat, String text) {
+    final [kind, id] = chat.split(':');
+    if (kind == 'group') {
+      final g = groups;
+      if (g == null) throw StateError('Groups are not up yet');
+      return g.send(id, text, expiresAt: _expiresAt(chat));
+    }
+    return _send(id, text, const [], expiresAt: _expiresAt(chat));
+  }
+
+  /// Whether [chat] can still take messages: we left no group, unfriended
+  /// nobody.
+  bool _reachable(String chat) {
+    final [kind, id] = chat.split(':');
+    if (kind != 'group') return stateOf(id) == FriendState.friend;
+    final g = groups;
+    return g == null || g.group(id) != null;
+  }
+
+  void _retryOutboxSoon() {
+    if (_closed) return;
+    _outboxTimer?.cancel();
+    _outboxTimer = Timer(
+      const Duration(seconds: 20),
+      () => unawaited(_flushOutbox()),
+    );
+  }
+
+  Future<void> _flushOutbox() async {
+    if (_flushing || _closed) return;
+    _flushing = true;
+    try {
+      for (final pending in outbox.all) {
+        if (_reachable(pending.chat)) {
+          try {
+            await _deliver(pending.chat, pending.text);
+          } catch (e) {
+            _retryOutboxSoon();
+            return;
+          }
+        }
+        await outbox.remove(pending.id);
+        if (!_closed) notifyListeners();
+      }
+    } finally {
+      _flushing = false;
+    }
+  }
 
   Future<void> sendFileToGroup(
     String groupId,
@@ -1012,11 +1088,12 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Queues the text when no relay takes it; see [outbox].
   Future<void> sendText(String pubkey, String text) {
     if (stateOf(pubkey) != FriendState.friend) {
       throw StateError('Only friends can be messaged');
     }
-    return _send(pubkey, text, const [], expiresAt: _expiresAt(dmChat(pubkey)));
+    return _sendOrQueue(dmChat(pubkey), text);
   }
 
   /// Encrypts on device (NIP-17 kind 15), uploads the ciphertext, then
@@ -1166,6 +1243,7 @@ class Session extends ChangeNotifier {
     await emojis.wipe();
     await gifs.wipe();
     await dms.wipe();
+    await outbox.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
@@ -1178,6 +1256,7 @@ class Session extends ChangeNotifier {
     _pruneTimer?.cancel();
     _allowTimer?.cancel();
     _pushTimer?.cancel();
+    _outboxTimer?.cancel();
     await _notices.close();
     await calls?.close();
     await sfuClient.close();

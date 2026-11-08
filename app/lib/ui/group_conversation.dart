@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../core/groups/media_types.dart';
 import '../core/calls/call_log.dart';
 import '../core/groups/group_engine.dart';
+import '../core/expiry.dart';
 import '../core/session.dart';
 import 'attachments.dart';
 import 'chat_page.dart';
@@ -83,7 +84,8 @@ class _Messages extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final messages = withCallLog(session.groups!.messagesIn(groupId));
-    if (messages.isEmpty) {
+    final pending = session.outbox.inChat(groupChat(groupId));
+    if (messages.isEmpty && pending.isEmpty) {
       return const EmptyState(
         icon: Icons.forum_outlined,
         title: 'FIRST WORD',
@@ -98,9 +100,16 @@ class _Messages extends StatelessWidget {
     return ListView.builder(
       reverse: true,
       padding: padding,
-      itemCount: messages.length,
+      itemCount: pending.length + messages.length,
       itemBuilder: (context, index) {
-        final i = messages.length - 1 - index;
+        if (index < pending.length) {
+          return MessageRow(
+            text: pending[pending.length - 1 - index].text,
+            outgoing: true,
+            pending: true,
+          );
+        }
+        final i = messages.length - 1 - (index - pending.length);
         final m = messages[i];
         if (m is CallLogEntry) return _CallRow(session: session, entry: m);
         if (m is! GroupMessage) return const SizedBox.shrink();
