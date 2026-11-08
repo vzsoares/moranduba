@@ -819,7 +819,28 @@ class Session extends ChangeNotifier {
 
   /// Asks the group's SFUs to ring the other members' devices when we start
   /// a call, and to stop when it ends.
-  void _pushRing(String groupId, CallEvent event) {
+  /// Rings [pubkey], or every member not in the call, into the call we are
+  /// in: in their open app, and through the group's servers when closed.
+  Future<void> ring(String groupId, {String? pubkey}) async {
+    final c = calls;
+    final call = c?.active;
+    if (c == null || call == null || call.groupId != groupId) {
+      throw StateError('Not in a call in this group');
+    }
+    await c.ring(to: pubkey);
+    final inCall = {...c.inCall(groupId), identity.publicKey};
+    _pushRing(
+      groupId,
+      CallEvent.started(call.callId),
+      only: (m) => pubkey == null ? !inCall.contains(m) : m == pubkey,
+    );
+  }
+
+  void _pushRing(
+    String groupId,
+    CallEvent event, {
+    bool Function(String member)? only,
+  }) {
     final g = groups;
     final sfus = _sfusOf(groupId);
     if (g == null || _closed || sfus.isEmpty) return;
@@ -827,7 +848,10 @@ class Session extends ChangeNotifier {
       g
           .members(groupId)
           .then((members) async {
-            final others = members.where((m) => m != identity.publicKey);
+            final others = members
+                .where((m) => m != identity.publicKey)
+                .where(only ?? (_) => true);
+            if (others.isEmpty) return;
             await Future.wait([
               for (final sfu in sfus)
                 sfuClient

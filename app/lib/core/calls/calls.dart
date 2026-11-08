@@ -20,7 +20,9 @@ const _presenceTimeout = Duration(seconds: 45);
 
 /// A join older than this no longer rings.
 const _ringWindow = Duration(seconds: 30);
-const _ringFor = Duration(seconds: 40);
+
+/// How long a ring lasts before it gives up.
+const ringFor = Duration(seconds: 40);
 
 /// A call in another group that wants us in it.
 class IncomingCall {
@@ -145,16 +147,22 @@ class Calls extends ChangeNotifier {
     ringing = null;
   }
 
-  void _ringIfNew(GroupSignal signal, CallSignal decoded, Duration age) {
+  /// [again] rings a call that rang before: someone in it asked.
+  void _ringIfNew(
+    GroupSignal signal,
+    CallSignal decoded,
+    Duration age, {
+    bool again = false,
+  }) {
     if (active != null || age > _ringWindow) return;
-    if (!_rang.add(decoded.callId)) return;
+    if (!_rang.add(decoded.callId) && !again) return;
     _ringTimer?.cancel();
     ringing = IncomingCall(
       groupId: signal.groupId,
       callId: decoded.callId,
       caller: signal.sender,
     );
-    _ringTimer = Timer(_ringFor, () {
+    _ringTimer = Timer(ringFor, () {
       _stopRinging();
       notifyListeners();
     });
@@ -304,6 +312,15 @@ class Calls extends ChangeNotifier {
     );
   }
 
+  /// Rings [to], or every member not in it, into the call we are in.
+  Future<void> ring({String? to}) async {
+    final call = active;
+    if (call == null || call.closed) throw StateError('Not in a call');
+    await call.signal(
+      CallSignal(type: SignalType.ring, callId: call.callId, to: to),
+    );
+  }
+
   Future<void> leave() async {
     final call = active;
     active = null;
@@ -355,6 +372,8 @@ class Calls extends ChangeNotifier {
         if (decoded.type == SignalType.join) {
           _ringIfNew(signal, decoded, age);
         }
+      case SignalType.ring when decoded.to == null || decoded.to == _groups.me:
+        _ringIfNew(signal, decoded, age, again: true);
       case SignalType.leave:
         group.remove(signal.sender);
         _stopRingingIfOver(signal.groupId);

@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:ndk/shared/nips/nip19/nip19.dart';
 
 import '../core/calls/call_quality.dart';
+import '../core/calls/calls.dart';
 import '../core/calls/group_call.dart';
 import '../core/calls/screen_capture.dart';
 import '../core/session.dart';
@@ -129,6 +130,62 @@ class _CallPageState extends State<CallPage> {
   final _quality = ValueNotifier<Map<String, LinkQuality>>(const {});
   Timer? _qualityTimer;
 
+  /// Other group members; those not in the call get a tile to ring them.
+  List<String> _members = const [];
+  final Map<String, DateTime> _rungAt = {};
+  Timer? _ringRefresh;
+
+  List<String> get _absent => [
+    for (final m in _members)
+      if (!call.participants.containsKey(m)) m,
+  ];
+
+  bool _ringing(String pubkey) =>
+      _rungAt[pubkey]?.isAfter(DateTime.now().subtract(ringFor)) ?? false;
+
+  Future<void> _loadMembers({required bool started}) async {
+    final members = await session.groups?.members(call.groupId);
+    if (members == null || !mounted) return;
+    final now = DateTime.now();
+    setState(() {
+      _members = [
+        for (final m in members)
+          if (m != session.identity.publicKey) m,
+      ];
+      // Starting a call rings everyone else.
+      if (started) {
+        for (final m in _members) {
+          _rungAt[m] = now;
+        }
+      }
+    });
+    if (started) _refreshWhenRingsEnd();
+  }
+
+  void _refreshWhenRingsEnd() {
+    _ringRefresh?.cancel();
+    _ringRefresh = Timer(ringFor + const Duration(milliseconds: 200), () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// Rings [pubkey], or everyone not in the call.
+  Future<void> _ring([String? pubkey]) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final now = DateTime.now();
+    setState(() {
+      for (final m in pubkey == null ? _absent : [pubkey]) {
+        _rungAt[m] = now;
+      }
+    });
+    _refreshWhenRingsEnd();
+    try {
+      await session.ring(call.groupId, pubkey: pubkey);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not ring: $e')));
+    }
+  }
+
   Future<void> _measureQuality() async {
     if (call.closed) return;
     try {
@@ -154,7 +211,9 @@ class _CallPageState extends State<CallPage> {
     super.initState();
     call.addListener(_closeWhenOver);
     call.addListener(_syncRingback);
+    final started = session.calls?.dialing ?? false;
     _syncRingback();
+    unawaited(_loadMembers(started: started));
     _ringbackLimit = Timer(const Duration(seconds: 15), _endRingback);
     _qualityTimer = Timer.periodic(
       const Duration(seconds: 2),
@@ -167,6 +226,7 @@ class _CallPageState extends State<CallPage> {
     call.removeListener(_closeWhenOver);
     _endRingback();
     _qualityTimer?.cancel();
+    _ringRefresh?.cancel();
     _quality.dispose();
     super.dispose();
   }
@@ -208,8 +268,14 @@ class _CallPageState extends State<CallPage> {
                 Expanded(
                   child: ValueListenableBuilder(
                     valueListenable: _quality,
-                    builder: (context, quality, _) =>
-                        _Tiles(session: session, call: call, quality: quality),
+                    builder: (context, quality, _) => _Tiles(
+                      session: session,
+                      call: call,
+                      quality: quality,
+                      absent: _absent,
+                      ringing: _ringing,
+                      onRing: _ring,
+                    ),
                   ),
                 ),
                 _Controls(call: call, onHangUp: _hangUp),
@@ -219,6 +285,11 @@ class _CallPageState extends State<CallPage> {
               appBar: AppBar(
                 title: Text(name.toUpperCase()),
                 actions: [
+                  IconButton(
+                    tooltip: 'Ring everyone not here',
+                    icon: const Icon(Icons.ring_volume_outlined),
+                    onPressed: _absent.isEmpty ? null : () => _ring(),
+                  ),
                   _QualityButton(session: session, quality: _quality),
                   IconButton(
                     tooltip: 'Audio settings',
@@ -553,11 +624,19 @@ class _Tiles extends StatelessWidget {
     required this.session,
     required this.call,
     required this.quality,
+    required this.absent,
+    required this.ringing,
+    required this.onRing,
   });
 
   final Session session;
   final GroupCall call;
   final Map<String, LinkQuality> quality;
+
+  /// Group members not in the call.
+  final List<String> absent;
+  final bool Function(String pubkey) ringing;
+  final void Function(String pubkey) onRing;
 
   @override
   Widget build(BuildContext context) {
@@ -591,7 +670,17 @@ class _Tiles extends StatelessWidget {
           },
         ),
     ];
-    if (others.isEmpty) {
+    for (final pubkey in absent) {
+      tiles.add(
+        _AbsentTile(
+          session: session,
+          pubkey: pubkey,
+          ringing: ringing(pubkey),
+          onRing: () => onRing(pubkey),
+        ),
+      );
+    }
+    if (others.isEmpty && absent.isEmpty) {
       tiles.add(const _Waiting());
     }
     return LayoutBuilder(
@@ -614,6 +703,55 @@ class _Tiles extends StatelessWidget {
       },
     );
   }
+}
+
+/// A member outside the call: ringing, or a button to ring them.
+class _AbsentTile extends StatelessWidget {
+  const _AbsentTile({
+    required this.session,
+    required this.pubkey,
+    required this.ringing,
+    required this.onRing,
+  });
+
+  final Session session;
+  final String pubkey;
+  final bool ringing;
+  final VoidCallback onRing;
+
+  @override
+  Widget build(BuildContext context) => Panel(
+    toned: true,
+    child: Center(
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PersonAvatar(session: session, pubkey: pubkey, size: 64),
+            const SizedBox(height: 8),
+            Text(session.displayName(pubkey)),
+            const SizedBox(height: 8),
+            if (ringing)
+              const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.ring_volume, size: 16),
+                  SizedBox(width: 6),
+                  Text('Ringing…'),
+                ],
+              )
+            else
+              OutlinedButton.icon(
+                icon: const Icon(Icons.ring_volume_outlined, size: 18),
+                label: const Text('Ring'),
+                onPressed: onRing,
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _Waiting extends StatelessWidget {

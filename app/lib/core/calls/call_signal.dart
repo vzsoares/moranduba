@@ -8,7 +8,10 @@ enum SignalType {
   leave,
   offer,
   answer,
-  switchMode('switch');
+  switchMode('switch'),
+
+  /// Rings [CallSignal.to], or every member not in the call, into it.
+  ring;
 
   const SignalType([this._wire]);
 
@@ -60,7 +63,7 @@ class CallSignal {
   final SignalType type;
   final String callId;
 
-  /// Recipient pubkey for offers and answers; null means everyone.
+  /// Recipient pubkey for offers, answers and rings; null means everyone.
   final String? to;
   final String? sdp;
   final MediaState media;

@@ -309,6 +309,9 @@ class GroupCall extends ChangeNotifier implements CallHost {
         _switchSeq = signal.seq;
         _switchFrom = from;
         await _applyMode(mode, signal.sfu);
+      case SignalType.ring:
+        // For members outside the call; Calls rings them.
+        break;
     }
     _notify();
   }
