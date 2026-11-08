@@ -7,6 +7,7 @@ on:
 
 env:
   FLUTTER_VERSION: 3.47.9
+  GO_VERSION: "1.26"
 
 jobs:
   linux:
@@ -25,10 +26,15 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sfu/go.sum
       - name: Rust
         working-directory: app/rust
         run: rustup toolchain install
       - run: flutter build linux --release
+      - run: ./tool/bundle_sfu.sh linux
       - run: >
           tar -czf "$GITHUB_WORKSPACE/moranduba-linux-x64.tar.gz"
           -C build/linux/x64/release/bundle .
@@ -50,10 +56,16 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sfu/go.sum
       - name: Rust
         working-directory: app/rust
         run: rustup toolchain install
       - run: flutter build macos --release
+      # Ad hoc signed: macOS asks to confirm the first launch.
+      - run: ./tool/bundle_sfu.sh macos
       - run: >
           ditto -c -k --keepParent
           build/macos/Build/Products/Release/moranduba.app
@@ -77,10 +89,15 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sfu/go.sum
       - name: Rust
         working-directory: app/rust
         run: rustup toolchain install
       - run: flutter build windows --release
+      - run: ./tool/bundle_sfu.sh windows
       - shell: pwsh
         run: >
           Compress-Archive -Path build/windows/x64/runner/Release/*
