@@ -142,6 +142,17 @@ class _CallBarLayerState extends State<CallBarLayer> {
                       ),
                     ),
                     Semantics(
+                      label: call.deafened ? 'Undeafen' : 'Deafen',
+                      button: true,
+                      child: IconButton(
+                        color: MangaColors.paper,
+                        icon: Icon(
+                          call.deafened ? Icons.headset_off : Icons.headset,
+                        ),
+                        onPressed: () => call.setDeafened(!call.deafened),
+                      ),
+                    ),
+                    Semantics(
                       label: 'Hang up',
                       button: true,
                       child: IconButton(

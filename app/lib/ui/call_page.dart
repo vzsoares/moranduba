@@ -490,6 +490,12 @@ class _Controls extends StatelessWidget {
               onPressed: () => call.setMic(!call.micOn),
             ),
             _RoundButton(
+              tooltip: call.deafened ? 'Undeafen' : 'Deafen',
+              icon: call.deafened ? Icons.headset_off : Icons.headset,
+              active: !call.deafened,
+              onPressed: () => call.setDeafened(!call.deafened),
+            ),
+            _RoundButton(
               tooltip: call.cameraOn ? 'Stop camera' : 'Start camera',
               icon: call.cameraOn ? Icons.videocam : Icons.videocam_off,
               active: call.cameraOn,

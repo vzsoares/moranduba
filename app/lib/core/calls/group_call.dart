@@ -116,6 +116,10 @@ class GroupCall extends ChangeNotifier implements CallHost {
   MediaStream? _camera;
   MediaStream? _screen;
   bool micOn = true;
+
+  /// Everyone silenced for us, our mic with it.
+  bool deafened = false;
+  bool _micBeforeDeafen = true;
   bool cameraOn = false;
   bool videoCapped = false;
 
@@ -313,6 +317,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     );
     if (p.stream?.id == stream.id) return;
     p.stream = stream;
+    if (deafened) _applyAudio();
     final renderer = p.renderer;
     if (renderer == null) {
       final created = RTCVideoRenderer();
@@ -362,7 +367,35 @@ class GroupCall extends ChangeNotifier implements CallHost {
     if (capped && cameraOn && !sharing) unawaited(setCamera(false));
   }
 
+  /// Deafening mutes the mic too; undeafening brings it back as it was.
+  Future<void> setDeafened(bool on) async {
+    if (on == deafened) return;
+    deafened = on;
+    _applyAudio();
+    if (on) {
+      _micBeforeDeafen = micOn;
+      if (micOn) return setMic(false);
+    } else if (_micBeforeDeafen) {
+      return setMic(true);
+    }
+    _notify();
+  }
+
+  /// Plays each participant's audio unless we are deafened.
+  void _applyAudio() {
+    for (final p in participants.values) {
+      for (final track in p.stream?.getAudioTracks() ?? <MediaStreamTrack>[]) {
+        track.enabled = !deafened;
+      }
+    }
+  }
+
+  /// Unmuting while deafened undeafens too.
   Future<void> setMic(bool on) async {
+    if (on && deafened) {
+      deafened = false;
+      _applyAudio();
+    }
     micOn = on;
     for (final track in _local?.getAudioTracks() ?? <MediaStreamTrack>[]) {
       track.enabled = on;

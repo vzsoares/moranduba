@@ -234,6 +234,17 @@ Future<void> _bob() async {
   await _connected(session, call, peer);
   _log('video from alice');
 
+  await call.setDeafened(true);
+  final heard = call.participants[peer]?.stream?.getAudioTracks() ?? [];
+  if (call.micOn || heard.isEmpty || heard.any((t) => t.enabled)) {
+    throw StateError('deafen left audio on: mic ${call.micOn}');
+  }
+  await call.setDeafened(false);
+  if (!call.micOn || heard.any((t) => !t.enabled)) {
+    throw StateError('undeafen did not restore audio');
+  }
+  _log('deafen and back');
+
   var last = await _framesFrom(call, peer);
   var still = DateTime.now();
   var flowed = 0;
