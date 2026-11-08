@@ -626,6 +626,7 @@ Future<T?> showPanelSheet<T>(
     mainAxisSize: MainAxisSize.min,
     children: [
       SizedBox(
+        width: double.infinity,
         height: 48,
         child: Stack(
           alignment: Alignment.center,
