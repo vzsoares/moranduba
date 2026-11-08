@@ -34,6 +34,9 @@ class IncomingCallLayer extends StatefulWidget {
 
 class _IncomingCallLayerState extends State<IncomingCallLayer> {
   final _tone = RingTone.incoming();
+
+  /// The tone stops before the card does.
+  Timer? _toneLimit;
   Calls? _calls;
   IncomingCall? _ringing;
 
@@ -51,6 +54,7 @@ class _IncomingCallLayerState extends State<IncomingCallLayer> {
   void dispose() {
     widget.controller.removeListener(_rewire);
     _calls?.removeListener(_sync);
+    _toneLimit?.cancel();
     _tone.dispose();
     super.dispose();
   }
@@ -72,9 +76,12 @@ class _IncomingCallLayerState extends State<IncomingCallLayer> {
     setState(() => _ringing = ringing);
     if (ringing == null) {
       _tone.stop();
+      _toneLimit?.cancel();
       return;
     }
     _tone.start();
+    _toneLimit?.cancel();
+    _toneLimit = Timer(const Duration(seconds: 15), _tone.stop);
     final session = _session;
     if (session != null) {
       notifyRing(

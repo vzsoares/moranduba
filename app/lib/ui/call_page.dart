@@ -21,7 +21,11 @@ bool get _desktop =>
       TargetPlatform.linux,
     }.contains(defaultTargetPlatform);
 
-/// Joins the group's call and shows it; leaving the page hangs up.
+/// How many call pages are showing or opening; the call bar hides then.
+final callPageOpen = ValueNotifier<int>(0);
+
+/// Joins the group's call, or returns to it, and shows it. Closing the page
+/// keeps the call going; hanging up ends it.
 Future<void> openCall(
   BuildContext context,
   Session session,
@@ -31,6 +35,8 @@ Future<void> openCall(
   if (calls == null) return;
   final messenger = ScaffoldMessenger.of(context);
   final navigator = Navigator.of(context);
+  // Counted from before the join, so the bar never flashes in between.
+  callPageOpen.value += 1;
   try {
     final call = await calls.join(groupId);
     if (calls.serverProblem case final problem?) {
@@ -47,6 +53,8 @@ Future<void> openCall(
     );
   } catch (e) {
     messenger.showSnackBar(SnackBar(content: Text('Could not join: $e')));
+  } finally {
+    callPageOpen.value -= 1;
   }
 }
 
@@ -69,16 +77,21 @@ class _CallPageState extends State<CallPage> {
   Session get session => widget.session;
   GroupCall get call => widget.call;
 
-  /// The caller hears this until someone answers, for at most 40 s.
+  /// The caller hears this until someone answers, for at most 15 s.
   final _ringback = RingTone.ringback();
   Timer? _ringbackLimit;
+
+  void _hangUp() {
+    unawaited(session.calls?.leave());
+    Navigator.of(context).maybePop();
+  }
 
   @override
   void initState() {
     super.initState();
     call.addListener(_syncRingback);
     _syncRingback();
-    _ringbackLimit = Timer(const Duration(seconds: 40), _endRingback);
+    _ringbackLimit = Timer(const Duration(seconds: 15), _endRingback);
   }
 
   @override
@@ -104,85 +117,79 @@ class _CallPageState extends State<CallPage> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) unawaited(session.calls?.leave());
-      },
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= _sideChatFrom;
-          return ListenableBuilder(
-            listenable: call,
-            builder: (context, _) {
-              final name = session.groups?.group(call.groupId)?.name ?? 'Call';
-              final stage = Column(
-                children: [
-                  if (call.switching)
-                    const _Notice('Switching how the call travels…'),
-                  if (call.switchProblem case final problem?)
-                    _Notice('Could not switch: $problem'),
-                  if (call.videoCapped)
-                    const _Notice(
-                      'Big call: cameras pause on mesh. A server keeps them on.',
-                    ),
-                  Expanded(
-                    child: _Tiles(session: session, call: call),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= _sideChatFrom;
+        return ListenableBuilder(
+          listenable: call,
+          builder: (context, _) {
+            final name = session.groups?.group(call.groupId)?.name ?? 'Call';
+            final stage = Column(
+              children: [
+                if (call.switching)
+                  const _Notice('Switching how the call travels…'),
+                if (call.switchProblem case final problem?)
+                  _Notice('Could not switch: $problem'),
+                if (call.videoCapped)
+                  const _Notice(
+                    'Big call: cameras pause on mesh. A server keeps them on.',
                   ),
-                  _Controls(call: call),
-                ],
-              );
-              return Scaffold(
-                appBar: AppBar(
-                  title: Text(name.toUpperCase()),
-                  actions: [
-                    _ModeSwitch(
-                      call: call,
-                      modes: [
-                        'mesh',
-                        if (session.serverOf(call.groupId) != null) 'server',
-                        if (session.hostsOf(call.groupId).isNotEmpty)
-                          'host_peer',
-                      ],
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      tooltip: wide && _chatOpen ? 'Hide chat' : 'Chat',
-                      isSelected: wide && _chatOpen,
-                      icon: const Icon(Icons.chat_bubble_outline),
-                      selectedIcon: const Icon(Icons.chat_bubble),
-                      onPressed: wide
-                          ? () => setState(() => _chatOpen = !_chatOpen)
-                          : () => _showChat(context),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
+                Expanded(
+                  child: _Tiles(session: session, call: call),
                 ),
-                body: wide && _chatOpen
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(child: stage),
-                          const VerticalDivider(
-                            width: MangaShape.stroke,
-                            thickness: MangaShape.stroke,
-                            color: MangaColors.ink,
+                _Controls(call: call, onHangUp: _hangUp),
+              ],
+            );
+            return Scaffold(
+              appBar: AppBar(
+                title: Text(name.toUpperCase()),
+                actions: [
+                  _ModeSwitch(
+                    call: call,
+                    modes: [
+                      'mesh',
+                      if (session.serverOf(call.groupId) != null) 'server',
+                      if (session.hostsOf(call.groupId).isNotEmpty) 'host_peer',
+                    ],
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: wide && _chatOpen ? 'Hide chat' : 'Chat',
+                    isSelected: wide && _chatOpen,
+                    icon: const Icon(Icons.chat_bubble_outline),
+                    selectedIcon: const Icon(Icons.chat_bubble),
+                    onPressed: wide
+                        ? () => setState(() => _chatOpen = !_chatOpen)
+                        : () => _showChat(context),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ),
+              body: wide && _chatOpen
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: stage),
+                        const VerticalDivider(
+                          width: MangaShape.stroke,
+                          thickness: MangaShape.stroke,
+                          color: MangaColors.ink,
+                        ),
+                        SizedBox(
+                          width: 360,
+                          child: GroupConversation(
+                            session: session,
+                            groupId: call.groupId,
+                            padding: const EdgeInsets.all(16),
                           ),
-                          SizedBox(
-                            width: 360,
-                            child: GroupConversation(
-                              session: session,
-                              groupId: call.groupId,
-                              padding: const EdgeInsets.all(16),
-                            ),
-                          ),
-                        ],
-                      )
-                    : stage,
-              );
-            },
-          );
-        },
-      ),
+                        ),
+                      ],
+                    )
+                  : stage,
+            );
+          },
+        );
+      },
     );
   }
 
@@ -456,9 +463,10 @@ class _Label extends StatelessWidget {
 }
 
 class _Controls extends StatelessWidget {
-  const _Controls({required this.call});
+  const _Controls({required this.call, required this.onHangUp});
 
   final GroupCall call;
+  final VoidCallback onHangUp;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -500,7 +508,7 @@ class _Controls extends StatelessWidget {
               tooltip: 'Hang up',
               icon: Icons.call_end,
               danger: true,
-              onPressed: () => Navigator.of(context).maybePop(),
+              onPressed: onHangUp,
             ),
           ],
         ),

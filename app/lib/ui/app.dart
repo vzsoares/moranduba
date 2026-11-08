@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_controller.dart';
+import 'call_bar.dart';
 import 'home_page.dart';
 import 'incoming_call.dart';
 import 'manga.dart';
@@ -26,10 +27,14 @@ class _MorandubaAppState extends State<MorandubaApp> {
     return MaterialApp(
       title: 'Moranduba',
       navigatorKey: _navigator,
-      builder: (context, child) => IncomingCallLayer(
+      builder: (context, child) => CallBarLayer(
         controller: controller,
         navigator: _navigator,
-        child: child ?? const SizedBox.shrink(),
+        child: IncomingCallLayer(
+          controller: controller,
+          navigator: _navigator,
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       debugShowCheckedModeBanner: false,
       theme: mangaTheme(),

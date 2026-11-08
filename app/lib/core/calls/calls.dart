@@ -311,8 +311,9 @@ class Calls extends ChangeNotifier {
         );
       }
     }
-    await call?.leave();
+    // Listeners hear about it even if tearing the call down fails.
     notifyListeners();
+    await call?.leave();
   }
 
   /// From the call's logged start when we have it, else from our joining.
