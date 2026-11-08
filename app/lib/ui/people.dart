@@ -1,7 +1,3 @@
-import 'dart:math' as math;
-import 'dart:typed_data';
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 
 import '../core/session.dart';
@@ -85,31 +81,4 @@ class PersonName extends StatelessWidget {
           : monoStyle,
     );
   }
-}
-
-/// Center-crops [bytes] to a [size]px square PNG, so profile pictures stay
-/// small whatever the source.
-Future<Uint8List> squarePicture(Uint8List bytes, {int size = 256}) async {
-  final codec = await ui.instantiateImageCodec(bytes);
-  final image = (await codec.getNextFrame()).image;
-  final side = math.min(image.width, image.height).toDouble();
-  final recorder = ui.PictureRecorder();
-  ui.Canvas(recorder).drawImageRect(
-    image,
-    Rect.fromLTWH(
-      (image.width - side) / 2,
-      (image.height - side) / 2,
-      side,
-      side,
-    ),
-    Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble()),
-    Paint()..filterQuality = FilterQuality.medium,
-  );
-  final square = await recorder.endRecording().toImage(size, size);
-  final png = await square.toByteData(format: ui.ImageByteFormat.png);
-  image.dispose();
-  square.dispose();
-  codec.dispose();
-  if (png == null) throw StateError('Could not encode the picture');
-  return png.buffer.asUint8List();
 }

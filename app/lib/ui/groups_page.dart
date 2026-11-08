@@ -16,6 +16,7 @@ import 'expiry_button.dart';
 import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
+import 'picture_cropper.dart';
 import 'search.dart';
 import 'server_dialog.dart';
 import 'theme.dart';
@@ -377,8 +378,10 @@ class GroupChatPage extends StatelessWidget {
     if (file == null || !context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final square = await squarePicture(await file.readAsBytes());
+      final bytes = await file.readAsBytes();
       if (!context.mounted) return;
+      final square = await cropPicture(context, bytes);
+      if (square == null || !context.mounted) return;
       await _setPicture(context, square);
     } catch (e) {
       messenger.showSnackBar(

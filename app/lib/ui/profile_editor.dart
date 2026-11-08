@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../core/session.dart';
 import 'manga.dart';
 import 'people.dart';
+import 'picture_cropper.dart';
 import 'theme.dart';
 
 /// Name and picture, shared encrypted with friends and groups.
@@ -47,7 +48,10 @@ class _ProfileEditorState extends State<ProfileEditor> {
     );
     if (file == null) return;
     try {
-      final square = await squarePicture(await file.readAsBytes());
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
+      final square = await cropPicture(context, bytes);
+      if (square == null || !mounted) return;
       setState(() {
         _picked = square;
         _removePicture = false;
