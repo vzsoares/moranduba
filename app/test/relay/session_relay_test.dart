@@ -121,6 +121,10 @@ void main() {
       'kept on the device',
     );
     expect(offline.friends, contains(aliceId.publicKey));
+    final hits = offline.search('ON THE device');
+    expect(hits.single.chat, dmChat(aliceId.publicKey));
+    expect(hits.single.sender, aliceId.publicKey);
+    expect(offline.search('nowhere'), isEmpty);
   });
 
   test('text typed with no relay waits, then goes out in order', () async {

@@ -13,6 +13,7 @@ import 'expiry_button.dart';
 import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
+import 'search.dart';
 import 'server_dialog.dart';
 import 'theme.dart';
 
@@ -281,6 +282,12 @@ class GroupChatPage extends StatelessWidget {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: 'Search this chat',
+                icon: const Icon(Icons.search),
+                onPressed: () =>
+                    showChatSearch(context, session, chat: groupChat(groupId)),
+              ),
               ExpiryButton(session: session, chat: groupChat(groupId)),
               IconButton(
                 tooltip: 'Call',

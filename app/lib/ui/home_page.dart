@@ -17,6 +17,7 @@ import 'manga.dart';
 import 'notifications/notifications.dart';
 import 'people.dart';
 import 'profile_editor.dart';
+import 'search.dart';
 import 'theme.dart';
 
 class HomePage extends StatefulWidget {
@@ -77,6 +78,15 @@ class _HomePageState extends State<HomePage>
               children: [Logo(), SizedBox(width: 10), Text('MORANDUBA')],
             ),
             actions: [
+              IconButton(
+                tooltip: 'Search all chats',
+                icon: const Icon(Icons.search),
+                onPressed: () => showChatSearch(
+                  context,
+                  session,
+                  onOpen: (chat) => _openChat(context, chat),
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Tooltip(
@@ -154,6 +164,19 @@ class _HomePageState extends State<HomePage>
         );
       },
     );
+  }
+
+  void _openChat(BuildContext context, String chat) {
+    final [kind, id] = chat.split(':');
+    if (kind == 'group') {
+      openGroup(context, session, id);
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatPage(session: session, peer: id),
+        ),
+      );
+    }
   }
 
   Future<void> _addFriend(BuildContext context) async {
@@ -344,6 +367,22 @@ class _WideHomeState extends State<_WideHome> {
                             child: Text(
                               'FRIENDS',
                               style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Search all chats',
+                            icon: const Icon(Icons.search),
+                            onPressed: () => showChatSearch(
+                              context,
+                              session,
+                              onOpen: (chat) {
+                                final [kind, id] = chat.split(':');
+                                setState(
+                                  () => _pane = kind == 'group'
+                                      ? _GroupPane(id)
+                                      : _HomePane(id),
+                                );
+                              },
                             ),
                           ),
                           IconButton(

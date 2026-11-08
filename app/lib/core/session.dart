@@ -22,6 +22,7 @@ import 'groups/group_engine.dart';
 import 'groups/groups.dart';
 import 'groups/mls_bridge.dart';
 import 'groups/mls_platform.dart';
+import 'groups/space.dart';
 import 'hotkeys.dart';
 import 'identity.dart';
 import 'outbox.dart';
@@ -1085,6 +1086,38 @@ class Session extends ChangeNotifier {
     ];
   }
 
+  /// Messages containing [query], newest first, from the chats on this
+  /// device; only [chat] when given. Nothing leaves the device.
+  List<SearchHit> search(String query, {String? chat}) {
+    final needle = query.trim().toLowerCase();
+    if (needle.isEmpty) return const [];
+    bool wanted(String key) => chat == null || chat == key;
+    final hits = <SearchHit>[
+      for (final peer in friends)
+        if (wanted(dmChat(peer)))
+          for (final m in chatWith(peer))
+            if (m.content.toLowerCase().contains(needle))
+              SearchHit(
+                chat: dmChat(peer),
+                sender: m.isOutgoing ? identity.publicKey : peer,
+                text: m.content,
+                createdAt: m.createdAt,
+              ),
+      for (final space in groups?.spaces ?? const <Space>[])
+        if (wanted(groupChat(space.id)))
+          for (final m
+              in groups?.messagesIn(space.id) ?? const <GroupMessage>[])
+            if (!m.call && m.text.toLowerCase().contains(needle))
+              SearchHit(
+                chat: groupChat(space.id),
+                sender: m.sender,
+                text: m.text,
+                createdAt: m.createdAt,
+              ),
+    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return hits;
+  }
+
   /// Our profile goes along, so they see who is asking.
   Future<void> requestFriend(String pubkey, {String note = ''}) async {
     if (pubkey == identity.publicKey) {
@@ -1313,6 +1346,23 @@ String dmFileName(Nip17Message message) {
 }
 
 /// A new message worth telling the user about.
+/// A message that matched a search; [chat] comes from dmChat or groupChat.
+class SearchHit {
+  const SearchHit({
+    required this.chat,
+    required this.sender,
+    required this.text,
+    required this.createdAt,
+  });
+
+  final String chat;
+  final String sender;
+  final String text;
+
+  /// Unix seconds.
+  final int createdAt;
+}
+
 class Notice {
   const Notice({required this.chat, required this.title, required this.body});
 

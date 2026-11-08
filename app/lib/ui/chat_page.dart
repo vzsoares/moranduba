@@ -8,6 +8,7 @@ import 'attachments.dart';
 import 'composer.dart';
 import 'gifs.dart';
 import 'expiry_button.dart';
+import 'search.dart';
 import 'manga.dart';
 import 'people.dart';
 import 'theme.dart';
@@ -36,6 +37,12 @@ class ChatPage extends StatelessWidget {
           ),
         ),
         actions: [
+          IconButton(
+            tooltip: 'Search this chat',
+            icon: const Icon(Icons.search),
+            onPressed: () =>
+                showChatSearch(context, session, chat: dmChat(peer)),
+          ),
           ListenableBuilder(
             listenable: session,
             builder: (context, _) =>
