@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/gifs.dart';
@@ -189,14 +189,18 @@ class _SavedGifTileState extends State<_SavedGifTile> {
     builder: (context, snapshot) {
       final bytes = snapshot.data;
       return _Tile(
-        tooltip: 'Send · long press to remove',
+        tooltip: 'Send',
         onTap: bytes == null
             ? null
             : () => widget.onSend(
                 bytes,
                 '${widget.gif.sha256.substring(0, 12)}.gif',
               ),
-        onLongPress: _remove,
+        action: (
+          icon: Icons.delete_outline,
+          tooltip: 'Remove from My GIFs',
+          onPressed: _remove,
+        ),
         child: switch ((bytes, snapshot.error)) {
           (final Uint8List bytes, _) => Image.memory(bytes, fit: BoxFit.cover),
           (_, final Object _) => const Icon(Icons.broken_image_outlined),
@@ -298,13 +302,17 @@ class _GiphySearchState extends State<_GiphySearch> {
                 itemBuilder: (context, index) {
                   final gif = gifs[index];
                   return _Tile(
-                    tooltip: 'Send · long press to save',
+                    tooltip: 'Send',
                     onTap: _sending == null
                         ? () => _pick(gif, save: false)
                         : null,
-                    onLongPress: _sending == null
-                        ? () => _pick(gif, save: true)
-                        : null,
+                    action: (
+                      icon: Icons.save_outlined,
+                      tooltip: 'Save to My GIFs',
+                      onPressed: _sending == null
+                          ? () => _pick(gif, save: true)
+                          : null,
+                    ),
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
@@ -340,36 +348,84 @@ class _GiphySearchState extends State<_GiphySearch> {
   );
 }
 
-class _Tile extends StatelessWidget {
+/// A corner button on a tile: on hover with a mouse, always on touch.
+typedef _TileAction = ({
+  IconData icon,
+  String tooltip,
+  VoidCallback? onPressed,
+});
+
+bool get _touch => const {
+  TargetPlatform.android,
+  TargetPlatform.iOS,
+}.contains(defaultTargetPlatform);
+
+class _Tile extends StatefulWidget {
   const _Tile({
     required this.tooltip,
     required this.child,
     this.onTap,
-    this.onLongPress,
+    this.action,
   });
 
   final String tooltip;
   final Widget child;
   final VoidCallback? onTap;
-  final VoidCallback? onLongPress;
+  final _TileAction? action;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-    message: tooltip,
-    child: DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: MangaShape.borderRadius,
-        border: Border.all(width: MangaShape.stroke),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(
-          MangaShape.radius - MangaShape.stroke,
+  State<_Tile> createState() => _TileState();
+}
+
+class _TileState extends State<_Tile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final action = widget.action;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: MangaShape.borderRadius,
+          border: Border.all(width: MangaShape.stroke),
         ),
-        child: Material(
-          color: MangaColors.paper,
-          child: InkWell(onTap: onTap, onLongPress: onLongPress, child: child),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(
+            MangaShape.radius - MangaShape.stroke,
+          ),
+          child: Material(
+            color: MangaColors.paper,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Tooltip(
+                  message: widget.tooltip,
+                  child: InkWell(onTap: widget.onTap, child: widget.child),
+                ),
+                if (action != null && (_hovered || _touch))
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: IconButton.filled(
+                      tooltip: action.tooltip,
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      style: IconButton.styleFrom(
+                        backgroundColor: MangaColors.paper,
+                        foregroundColor: MangaColors.ink,
+                        side: const BorderSide(width: MangaShape.stroke),
+                      ),
+                      icon: Icon(action.icon),
+                      onPressed: action.onPressed,
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
