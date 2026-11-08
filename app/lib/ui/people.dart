@@ -33,6 +33,33 @@ class PersonAvatar extends StatelessWidget {
   }
 }
 
+/// [groupId]'s picture, or the group placeholder.
+class GroupAvatar extends StatelessWidget {
+  const GroupAvatar({
+    super.key,
+    required this.session,
+    required this.groupId,
+    this.size = 44,
+  });
+
+  final Session session;
+  final String groupId;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = session.groupPictures.of(groupId).picture;
+    const icon = Icons.groups_outlined;
+    if (ref == null) return Avatar(icon: icon, size: size);
+    return FutureBuilder(
+      key: ValueKey(ref.url),
+      future: session.groupPicture(groupId),
+      builder: (_, snapshot) =>
+          Avatar(icon: icon, size: size, picture: snapshot.data),
+    );
+  }
+}
+
 /// [pubkey]'s name; monospace when it falls back to a short npub.
 class PersonName extends StatelessWidget {
   const PersonName({

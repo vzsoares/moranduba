@@ -17,6 +17,7 @@ import 'friend_list.dart';
 import 'dm_archive.dart';
 import 'friend_protocol.dart';
 import 'gifs.dart';
+import 'group_pictures.dart';
 import 'groups/blossom.dart';
 import 'groups/group_engine.dart';
 import 'groups/groups.dart';
@@ -44,6 +45,7 @@ class Session extends ChangeNotifier {
     this.servers,
     this.callLogs,
     this.emojis,
+    this.groupPictures,
     this.gifs,
     this.dms,
     this.outbox,
@@ -88,6 +90,10 @@ class Session extends ChangeNotifier {
       await openStore('${identity.publicKey}-emojis'),
     );
     await emojiBook.load();
+    final pictureBook = GroupPictureBook(
+      await openStore('${identity.publicKey}-grouppics'),
+    );
+    await pictureBook.load();
     final gifBook = GifBook(await openStore('${identity.publicKey}-gifs'));
     await gifBook.load();
     final dmArchive = DmArchive(await openStore('${identity.publicKey}-dms'));
@@ -113,6 +119,7 @@ class Session extends ChangeNotifier {
       sfus,
       logs,
       emojiBook,
+      pictureBook,
       gifBook,
       dmArchive,
       pending,
@@ -142,6 +149,7 @@ class Session extends ChangeNotifier {
   final SfuBook servers;
   final CallLogBook callLogs;
   final EmojiBook emojis;
+  final GroupPictureBook groupPictures;
   final GifBook gifs;
   final DmArchive dms;
 
@@ -230,6 +238,8 @@ class Session extends ChangeNotifier {
         relays: relays,
         blossom: blossom,
       );
+      // History replays during start; signals heard then are not resent.
+      started.signals.listen(_onGroupSignal);
       await started.start();
       groups = started;
       calls = Calls(started, sfuClient: sfuClient)
@@ -240,12 +250,12 @@ class Session extends ChangeNotifier {
         ..serverFor = serverOf
         ..hostsFor = servers.hostsOf
         ..audioPrefs = (() => audio.current);
-      started.signals.listen(_onGroupSignal);
       started.incoming.listen(_onGroupMessage);
       started.addListener(_shareProfileSoon);
       started.addListener(_announceExpiriesSoon);
       started.addListener(_announceCallLogsSoon);
       started.addListener(_announceEmojisSoon);
+      started.addListener(_announceGroupPicturesSoon);
       started.addListener(_announceServersSoon);
       started.addListener(_syncAllowlistsSoon);
       started.addListener(_syncPushSoon);
@@ -387,6 +397,18 @@ class Session extends ChangeNotifier {
             }
             _syncAllowlistsSoon();
             _syncPushSoon();
+            if (!_closed) notifyListeners();
+          }),
+        );
+      case {'t': 'picture', 'picture': final Object? json}:
+        final picture = GroupPicture.fromJson(json);
+        if (picture == null) return;
+        unawaited(
+          groupPictures.put(signal.groupId, picture).then((changed) async {
+            if (!changed) return;
+            if (groups?.group(signal.groupId)?.epoch case final epoch?) {
+              await groupPictures.markAnnounced(signal.groupId, epoch);
+            }
             if (!_closed) notifyListeners();
           }),
         );
@@ -789,6 +811,68 @@ class Session extends ChangeNotifier {
           })
           .catchError((Object e) => debugPrint('push ring: $e')),
     );
+  }
+
+  /// [groupId]'s decrypted picture, or null when it has none.
+  Future<Uint8List?> groupPicture(String groupId) {
+    final ref = groupPictures.of(groupId).picture;
+    return ref == null ? Future.value() : emojiImage(ref);
+  }
+
+  /// Uploads [image] encrypted as [groupId]'s picture for everyone; null
+  /// removes it.
+  Future<void> setGroupPicture(
+    String groupId,
+    Uint8List? image, {
+    String mime = 'image/png',
+  }) async {
+    PictureRef? ref;
+    if (image != null) {
+      final (sealed, finish) = await encryptPicture(image, mime);
+      ref = finish(await _blossom.upload(sealed));
+    }
+    final now = _now();
+    final previous = groupPictures.of(groupId).setAt;
+    final picture = GroupPicture(
+      picture: ref,
+      setAt: now > previous ? now : previous + 1,
+    );
+    await groupPictures.put(groupId, picture);
+    notifyListeners();
+    await _announceGroupPicture(groupId, picture);
+  }
+
+  Future<void> _announceGroupPicture(
+    String groupId,
+    GroupPicture picture,
+  ) async {
+    final g = groups;
+    if (g == null) return;
+    await g.sendSignal(
+      groupId,
+      jsonEncode({'t': 'picture', 'picture': picture.toJson()}),
+    );
+    if (g.group(groupId)?.epoch case final epoch?) {
+      await groupPictures.markAnnounced(groupId, epoch);
+    }
+  }
+
+  /// Members who joined since the picture changed learn it on the next epoch.
+  void _announceGroupPicturesSoon() {
+    final g = groups;
+    if (g == null || _closed) return;
+    for (final space in g.spaces) {
+      final picture = groupPictures.of(space.id);
+      final epoch = g.group(space.id)?.epoch;
+      if (picture.setAt == 0 || epoch == null) continue;
+      if (groupPictures.announcedOn(space.id, epoch)) continue;
+      unawaited(
+        groupPictures
+            .markAnnounced(space.id, epoch)
+            .then((_) => _announceGroupPicture(space.id, picture))
+            .catchError((Object e) => debugPrint('announce picture: $e')),
+      );
+    }
   }
 
   /// Whether [groupId] records calls in its chat.
@@ -1302,6 +1386,7 @@ class Session extends ChangeNotifier {
     await servers.wipe();
     await callLogs.wipe();
     await emojis.wipe();
+    await groupPictures.wipe();
     await gifs.wipe();
     await dms.wipe();
     await outbox.wipe();

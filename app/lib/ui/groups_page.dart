@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../core/calls/call_log.dart';
@@ -59,7 +62,7 @@ class GroupsTab extends StatelessWidget {
         return Entrance(
           index: i,
           child: RowPanel(
-            icon: Icons.groups_outlined,
+            leading: GroupAvatar(session: session, groupId: space.id),
             title: Text(space.name, style: text.titleMedium),
             line: last == null
                 ? members(info?.memberCount ?? 0)
@@ -265,7 +268,13 @@ class GroupChatPage extends StatelessWidget {
             titleSpacing: 0,
             title: Row(
               children: [
-                const Avatar(icon: Icons.groups_outlined),
+                Tooltip(
+                  message: 'Change group picture',
+                  child: InkResponse(
+                    onTap: () => _choosePicture(context),
+                    child: GroupAvatar(session: session, groupId: groupId),
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -310,6 +319,15 @@ class GroupChatPage extends StatelessWidget {
                     ),
                     child: const Text('Call server…'),
                   ),
+                  PopupMenuItem(
+                    onTap: () => _choosePicture(context),
+                    child: const Text('Group picture…'),
+                  ),
+                  if (session.groupPictures.of(groupId).picture != null)
+                    PopupMenuItem(
+                      onTap: () => _setPicture(context, null),
+                      child: const Text('Remove group picture'),
+                    ),
                   CheckedPopupMenuItem(
                     checked: session.logsCalls(groupId),
                     onTap: () => session.setCallLog(
@@ -345,6 +363,41 @@ class GroupChatPage extends StatelessWidget {
         context,
         builder: (_) => _MembersSheet(session: session, info: info),
       );
+
+  Future<void> _choosePicture(BuildContext context) async {
+    final file = await openFile(
+      acceptedTypeGroups: const [
+        XTypeGroup(
+          label: 'Pictures',
+          extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+          mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+        ),
+      ],
+    );
+    if (file == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final square = await squarePicture(await file.readAsBytes());
+      if (!context.mounted) return;
+      await _setPicture(context, square);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('That picture does not open: $e')),
+      );
+    }
+  }
+
+  /// Sends [picture] to everyone in the group; null removes it.
+  Future<void> _setPicture(BuildContext context, Uint8List? picture) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await session.setGroupPicture(groupId, picture);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not change the picture: $e')),
+      );
+    }
+  }
 
   Future<void> _confirmLeave(BuildContext context, GroupInfo info) async {
     final confirmed = await showDialog<bool>(

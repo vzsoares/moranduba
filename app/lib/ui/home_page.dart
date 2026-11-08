@@ -309,6 +309,7 @@ class _WideHomeState extends State<_WideHome> {
                                   pane.groupId == space.id,
                               onTap: () =>
                                   setState(() => _pane = _GroupPane(space.id)),
+                              picture: session.groupPicture(space.id),
                               child: Text(
                                 _initials(space.name),
                                 style: const TextStyle(
@@ -451,6 +452,7 @@ class _RailItem extends StatelessWidget {
     required this.child,
     this.selected = false,
     this.badge = 0,
+    this.picture,
   });
 
   final String tooltip;
@@ -458,6 +460,9 @@ class _RailItem extends StatelessWidget {
   final Widget child;
   final bool selected;
   final int badge;
+
+  /// Fills the button in place of [child] once loaded.
+  final Future<Uint8List?>? picture;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -486,12 +491,28 @@ class _RailItem extends StatelessWidget {
                   width: 48,
                   height: 48,
                   alignment: Alignment.center,
+                  clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: selected ? MangaColors.tone : MangaColors.paper,
                     borderRadius: BorderRadius.circular(selected ? 14 : 24),
                     border: Border.all(width: MangaShape.stroke),
                   ),
-                  child: child,
+                  child: switch (picture) {
+                    final picture? => FutureBuilder(
+                      future: picture,
+                      builder: (_, snapshot) => switch (snapshot.data) {
+                        final bytes? => Image.memory(
+                          bytes,
+                          width: 48,
+                          height: 48,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                        ),
+                        null => child,
+                      },
+                    ),
+                    null => child,
+                  },
                 ),
                 if (badge > 0)
                   Positioned(right: -4, top: -4, child: _Badge(count: badge)),

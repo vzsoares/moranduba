@@ -302,6 +302,40 @@ void main() {
     await _until(alice, () => alice.emojisOf(group.id).isEmpty);
   }, timeout: const Timeout(Duration(seconds: 90)));
 
+  test('group pictures reach members and late joiners', () async {
+    final server = await FakeBlossom.start();
+    addTearDown(server.close);
+    final blossom = BlossomClient(servers: [server.url]);
+    final ids = [Identity.generate(), Identity.generate(), Identity.generate()];
+    final [alice, bob, carol] = [
+      for (final id in ids)
+        await _start(id, MemorySnapshotStore(), blossom: blossom),
+    ];
+    for (final s in [alice, bob, carol]) {
+      addTearDown(s.close);
+    }
+    final group = await alice.groups!.create('pic', [ids[1].publicKey]);
+    final bobGroups = bob.groups!;
+    await _until(bobGroups, () => bobGroups.invites.isNotEmpty);
+    await bobGroups.accept(bobGroups.invites.single.id);
+
+    final image = Uint8List.fromList(List.generate(80, (i) => 255 - i));
+    await alice.setGroupPicture(group.id, image);
+    expect(server.blobs.values.single, isNot(image));
+    await _until(bob, () => bob.groupPictures.of(group.id).picture != null);
+    expect(await bob.groupPicture(group.id), image);
+
+    await alice.groups!.addMembers(group.id, [ids[2].publicKey]);
+    final carolGroups = carol.groups!;
+    await _until(carolGroups, () => carolGroups.invites.isNotEmpty);
+    await carolGroups.accept(carolGroups.invites.single.id);
+    await _until(carol, () => carol.groupPictures.of(group.id).picture != null);
+
+    await bob.setGroupPicture(group.id, null);
+    await _until(alice, () => alice.groupPictures.of(group.id).picture == null);
+    expect(await alice.groupPicture(group.id), isNull);
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
   test(
     'a desktop hosts calls: sidecar starts, gets listed, lets members in',
     () async {
