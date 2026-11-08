@@ -139,6 +139,13 @@ class GroupCall extends ChangeNotifier implements CallHost {
   bool get sharing => _screen != null;
   String get mode => _transport.mode;
 
+  /// The SFU carrying the call (hex pubkey); null in mesh.
+  String? get sfu => _transport.sfu;
+
+  /// The group epoch whose exported key encrypts the frames; -1 before
+  /// the first.
+  int get keyEpoch => _keyEpoch;
+
   @override
   String get me => _groups.me;
 

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:ndk/shared/nips/nip19/nip19.dart';
 
 import '../core/calls/group_call.dart';
 import '../core/calls/screen_capture.dart';
@@ -12,6 +13,7 @@ import 'group_conversation.dart';
 import 'manga.dart';
 import 'people.dart';
 import 'ring_tone.dart';
+import 'server_dialog.dart';
 import 'theme.dart';
 
 bool get _desktop =>
@@ -158,6 +160,7 @@ class _CallPageState extends State<CallPage> {
                     onPressed: () => showAudioSettings(context, session),
                   ),
                   _ModeSwitch(
+                    session: session,
                     call: call,
                     modes: [
                       'mesh',
@@ -222,34 +225,208 @@ class _CallPageState extends State<CallPage> {
   );
 }
 
-/// The mode badge; a menu to move the whole call to another mode.
+/// The mode badge; tapping it explains how the call is protected and
+/// carried, and moves everyone to another mode.
 class _ModeSwitch extends StatelessWidget {
-  const _ModeSwitch({required this.call, required this.modes});
+  const _ModeSwitch({
+    required this.session,
+    required this.call,
+    required this.modes,
+  });
 
+  final Session session;
   final GroupCall call;
 
   /// Modes this group can use.
   final List<String> modes;
 
-  static const _labels = {
-    'mesh': 'Switch everyone to direct (mesh)',
-    'server': 'Switch everyone to the call server',
-    'host_peer': "Switch everyone to a member's computer",
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: 'Encryption and how the call travels',
+    child: InkWell(
+      borderRadius: BorderRadius.circular(4),
+      onTap: () => showPanelSheet<void>(
+        context,
+        builder: (_) =>
+            _CallInfoSheet(session: session, call: call, modes: modes),
+      ),
+      child: _ModeBadge(mode: call.mode),
+    ),
+  );
+}
+
+/// What each call mode is, for the info sheet.
+const _modeInfo = {
+  'mesh': (
+    title: 'Direct (mesh)',
+    about:
+        'Every member connects to every other. No server in between, so '
+        'nothing to set up.',
+    limits:
+        'Each member uploads to everyone: audio is fine for about 15 '
+        'people; cameras pause above 4 others.',
+  ),
+  'server': (
+    title: 'Call server',
+    about:
+        'Everyone sends one stream to a Moranduba server (SFU) that '
+        'forwards it. It sees only encrypted frames and who is connected.',
+    limits:
+        "Scales to the server's bandwidth. Set one up, or use one someone "
+        'shares, in Call server settings.',
+  ),
+  'host_peer': (
+    title: "A member's computer",
+    about:
+        'A member running Moranduba on a desktop hosts the call server '
+        'for the group while the app is open.',
+    limits:
+        'The host needs good upload (about 20 Mbps for 15 people) and the '
+        'desktop app open.',
+  ),
+};
+
+class _CallInfoSheet extends StatelessWidget {
+  const _CallInfoSheet({
+    required this.session,
+    required this.call,
+    required this.modes,
+  });
+
+  final Session session;
+  final GroupCall call;
+  final List<String> modes;
+
+  String _unavailable(String mode) => switch (mode) {
+    'server' => 'No call server set for this group.',
+    'host_peer' => 'Nobody hosts calls for this group.',
+    _ => '',
   };
 
   @override
   Widget build(BuildContext context) {
-    final badge = _ModeBadge(mode: call.mode);
-    final targets = modes.where((m) => m != call.mode).toList();
-    if (!call.canSwitch || call.switching || targets.isEmpty) return badge;
-    return PopupMenuButton<String>(
-      tooltip: 'How the call travels',
-      onSelected: (mode) => unawaited(call.switchMode(mode)),
-      itemBuilder: (_) => [
-        for (final mode in targets)
-          PopupMenuItem(value: mode, child: Text(_labels[mode] ?? mode)),
-      ],
-      child: badge,
+    final text = Theme.of(context).textTheme;
+    return ListenableBuilder(
+      listenable: call,
+      builder: (context, _) {
+        final sfu = call.sfu;
+        return SafeArea(
+          child: Center(
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('END-TO-END ENCRYPTED', style: text.headlineSmall),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Audio and video are encrypted on your device with a '
+                      'key only this group has (exported from its MLS '
+                      'group, epoch ${call.keyEpoch}). Relays and servers '
+                      'forward ciphertext; when members join or leave, the '
+                      'key changes.',
+                    ),
+                    const SizedBox(height: 16),
+                    Text('HOW IT TRAVELS', style: text.titleMedium),
+                    const SizedBox(height: 8),
+                    for (final mode in _modeInfo.keys)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Panel(
+                          color: mode == call.mode
+                              ? MangaColors.tone
+                              : MangaColors.paper,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      _modeInfo[mode]!.title,
+                                      style: text.titleSmall,
+                                    ),
+                                  ),
+                                  if (mode == call.mode)
+                                    const Text('IN USE')
+                                  else if (!modes.contains(mode))
+                                    const SizedBox.shrink()
+                                  else if (call.canSwitch && !call.switching)
+                                    TextButton(
+                                      onPressed: () =>
+                                          unawaited(call.switchMode(mode)),
+                                      child: const Text('Switch everyone'),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(_modeInfo[mode]!.about),
+                              const SizedBox(height: 4),
+                              Text(
+                                modes.contains(mode)
+                                    ? _modeInfo[mode]!.limits
+                                    : _unavailable(mode),
+                                style: text.bodySmall,
+                              ),
+                              if (mode == call.mode && sfu != null) ...[
+                                const SizedBox(height: 4),
+                                SelectableText(
+                                  'Server: ${Nip19.encodePubKey(sfu)}',
+                                  style: monoStyle.copyWith(fontSize: 11),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (call.switching) const Text('Switching…'),
+                    if (call.switchProblem case final problem?)
+                      Text('Last switch failed: $problem'),
+                    const SizedBox(height: 8),
+                    Text('CONNECTIONS', style: text.titleMedium),
+                    const SizedBox(height: 4),
+                    if (call.participants.isEmpty)
+                      const Text('Nobody else yet.')
+                    else
+                      for (final p in call.participants.values)
+                        Text('${session.displayName(p.pubkey)}: ${p.state}'),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.dns_outlined, size: 18),
+                          label: const Text('Call server settings'),
+                          onPressed: () => showDialog<void>(
+                            context: context,
+                            builder: (_) => ServerDialog(
+                              session: session,
+                              groupId: call.groupId,
+                            ),
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(
+                            Icons.settings_voice_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('Audio settings'),
+                          onPressed: () => showAudioSettings(context, session),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
