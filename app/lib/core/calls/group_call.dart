@@ -636,14 +636,14 @@ class GroupCall extends ChangeNotifier implements CallHost {
   Future<Map<String, LinkQuality>> quality() async =>
       _meter.measure(await _transport.stats());
 
+  /// Closed at once for the UI; the leave signal goes out while media
+  /// tears down.
   Future<void> leave() async {
     if (_closed) return;
-    try {
-      await _announce(SignalType.leave);
-    } catch (e) {
-      debugPrint('leave signal: $e');
-    }
+    final announced = _announce(SignalType.leave)
+        .catchError((Object e) => debugPrint('leave signal: $e'));
     _closed = true;
+    notifyListeners();
     _ticker?.cancel();
     _groups.removeListener(_onGroupChanged);
     await _transport.close();
@@ -661,7 +661,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     }
     await localRenderer.dispose();
     await crypto.dispose();
-    notifyListeners();
+    await announced;
   }
 
   bool get closed => _closed;
