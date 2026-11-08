@@ -134,7 +134,7 @@ class _AudioSettingsState extends State<_AudioSettings> {
                 const SizedBox(height: 12),
                 if (micLevelSupported)
                   _level(
-                    'Microphone level',
+                    'Input volume',
                     _prefs.inputVolume,
                     (v) => _set(_prefs.copyWith(inputVolume: v)),
                   ),

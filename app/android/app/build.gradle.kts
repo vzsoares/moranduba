@@ -64,4 +64,6 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // MicGain hooks flutter_webrtc's processing adapter; keep in step with its version.
+    compileOnly("io.github.webrtc-sdk:android:150.7871.04")
 }

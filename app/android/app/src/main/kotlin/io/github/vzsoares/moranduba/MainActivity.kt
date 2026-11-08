@@ -24,5 +24,14 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "moranduba/mic_gain",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "set" -> result.success(MicGain.set(call.argument<Double>("gain") ?: 1.0))
+                else -> result.notImplemented()
+            }
+        }
     }
 }

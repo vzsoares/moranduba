@@ -576,6 +576,21 @@ void FlutterWebRTC::HandleMethodCall(
     audioTrack->SetVolume(volume.value());
 
     result->Success();
+  } else if (method_call.method_name().compare("setCaptureGain") == 0) {
+    auto args = method_call.arguments();
+    const std::optional<double> gain =
+        args ? maybeFindDouble(GetValue<EncodableMap>(*args), "gain")
+             : std::nullopt;
+    if (!gain.has_value() || gain.value() < 0) {
+      result->Error("Bad Arguments", "setCaptureGain() needs a gain >= 0");
+      return;
+    }
+    if (!capture_gain_) {
+      capture_gain_ = new CaptureGain();
+      audio_processing()->SetCapturePostProcessing(capture_gain_);
+    }
+    capture_gain_->gain.store(static_cast<float>(gain.value()));
+    result->Success(EncodableValue(true));
   } else if (method_call.method_name().compare("getLocalDescription") == 0) {
     if (!method_call.arguments()) {
       result->Error("Bad Arguments", "Null constraints arguments received");
