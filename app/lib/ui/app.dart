@@ -51,15 +51,28 @@ class _MorandubaAppState extends State<MorandubaApp> {
           AppStage.ready => HomePage(
             session: controller.session!,
             onLogout: controller.logout,
+            onReconnect: controller.reconnect,
           ),
           AppStage.failed => Scaffold(
             body: EmptyState(
               icon: Icons.wifi_off_outlined,
               title: 'NO SIGNAL',
               message: 'Could not reach the relays: ${controller.error}',
-              action: FilledButton(
-                onPressed: controller.restore,
-                child: const Text('Try again'),
+              action: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  FilledButton(
+                    onPressed: controller.restore,
+                    child: const Text('Try again'),
+                  ),
+                  if (controller.customServers)
+                    OutlinedButton(
+                      onPressed: controller.useDefaultServers,
+                      child: const Text('Use default servers'),
+                    ),
+                ],
               ),
             ),
           ),

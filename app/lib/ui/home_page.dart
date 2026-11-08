@@ -18,13 +18,22 @@ import 'notifications/notifications.dart';
 import 'people.dart';
 import 'profile_editor.dart';
 import 'search.dart';
+import 'server_settings.dart';
 import 'theme.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.session, required this.onLogout});
+  const HomePage({
+    super.key,
+    required this.session,
+    required this.onLogout,
+    required this.onReconnect,
+  });
 
   final Session session;
   final Future<void> Function() onLogout;
+
+  /// Restarts the session after relays or servers change.
+  final Future<void> Function() onReconnect;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -203,7 +212,11 @@ class _HomePageState extends State<HomePage>
 
   Future<void> _showIdentity(BuildContext context) => showPanelSheet<void>(
     context,
-    builder: (_) => _IdentitySheet(session: session, onLogout: widget.onLogout),
+    builder: (_) => _IdentitySheet(
+      session: session,
+      onLogout: widget.onLogout,
+      onReconnect: widget.onReconnect,
+    ),
   );
 }
 
@@ -865,10 +878,15 @@ class _AddFriendDialogState extends State<_AddFriendDialog> {
 }
 
 class _IdentitySheet extends StatefulWidget {
-  const _IdentitySheet({required this.session, required this.onLogout});
+  const _IdentitySheet({
+    required this.session,
+    required this.onLogout,
+    required this.onReconnect,
+  });
 
   final Session session;
   final Future<void> Function() onLogout;
+  final Future<void> Function() onReconnect;
 
   @override
   State<_IdentitySheet> createState() => _IdentitySheetState();
@@ -910,6 +928,16 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   icon: const Icon(Icons.keyboard_outlined, size: 18),
                   label: const Text('Call hotkeys'),
                   onPressed: () => showHotkeySettings(context, widget.session),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.dns_outlined, size: 18),
+                  label: const Text('Relays and file servers'),
+                  onPressed: () => showServerSettings(
+                    context,
+                    widget.session,
+                    onReconnect: widget.onReconnect,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 Text('YOUR KEY', style: text.headlineSmall),

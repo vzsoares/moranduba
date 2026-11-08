@@ -26,6 +26,7 @@ import 'groups/mls_platform.dart';
 import 'groups/space.dart';
 import 'hotkeys.dart';
 import 'identity.dart';
+import 'network.dart';
 import 'outbox.dart';
 import 'profiles.dart';
 import 'push/push.dart';
@@ -51,6 +52,7 @@ class Session extends ChangeNotifier {
     this.outbox,
     this.audio,
     this.hotkeys,
+    this.network,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -62,8 +64,12 @@ class Session extends ChangeNotifier {
     BlossomClient? blossom,
     Future<SnapshotStore> Function(String name) openStore = openSnapshotStore,
   }) async {
-    final files = blossom ?? BlossomClient();
-    final relayList = relays ?? defaultRelays;
+    final network = NetworkBook(
+      await openStore('${identity.publicKey}-network'),
+    );
+    await network.load();
+    final files = blossom ?? BlossomClient(servers: network.blossom);
+    final relayList = relays ?? network.relays ?? defaultRelays;
     final ndk = Ndk(
       NdkConfig(
         cache: MemCacheManager(),
@@ -125,6 +131,7 @@ class Session extends ChangeNotifier {
       pending,
       audioPrefs,
       hotkeyBook,
+      network,
     );
     await session._init();
     if (openGroupEngine != null) {
@@ -161,6 +168,13 @@ class Session extends ChangeNotifier {
 
   /// Call shortcuts on this device.
   final HotkeyBook hotkeys;
+
+  /// Relays and Blossom servers chosen on this device; they apply on the
+  /// next start.
+  final NetworkBook network;
+
+  /// Blossom servers attachments go to.
+  List<String> get blossomServers => _blossom.servers;
   Timer? _outboxTimer;
   bool _flushing = false;
   final Map<String, Future<Uint8List>> _emojiImages = {};
@@ -1392,6 +1406,7 @@ class Session extends ChangeNotifier {
     await outbox.wipe();
     await audio.wipe();
     await hotkeys.wipe();
+    await network.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
