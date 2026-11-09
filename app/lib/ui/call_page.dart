@@ -582,9 +582,10 @@ class _CallInfoSheet extends StatelessWidget {
                       (p) => p.state == 'failed',
                     ))
                       const Text(
-                        'Nobody in the call can pass on media for a failed '
-                        'link. A TURN server (Profile > Relays and file '
-                        'servers) or a call server fixes it.',
+                        'A failed link gets relayed by someone else in the '
+                        'call when they can reach both people. If it stays '
+                        'failed, add a TURN server (Profile > Relays and '
+                        'file servers) or a call server.',
                       ),
                     const SizedBox(height: 16),
                     Wrap(

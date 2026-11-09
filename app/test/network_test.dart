@@ -23,6 +23,8 @@ void main() {
       turnUrl(' turns:turn.example.com:5349?transport=tcp '),
       'turns:turn.example.com:5349?transport=tcp',
     );
+    expect(turnUrl('TURN:turn.example.com:3478'), 'turn:turn.example.com:3478');
+    expect(turnUrl('Turns:turn.example.com'), 'turns:turn.example.com');
     expect(turnUrl('turn:user:pass@turn.example.com'), isNull);
     expect(turnUrl('turn:'), isNull);
     expect(turnUrl(''), isNull);

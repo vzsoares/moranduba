@@ -25,13 +25,15 @@ String? _url(String raw, Set<String> schemes, String fallback) {
 }
 
 /// [raw] as a TURN server URL (`turn:` added when no scheme), or null when
-/// it is not one. Query parameters such as `?transport=tcp` stay.
+/// it is not one. The scheme comes out lowercase; query parameters such as
+/// `?transport=tcp` stay.
 String? turnUrl(String raw) {
   var text = raw.trim();
   if (text.isEmpty || text.contains(' ')) return null;
-  if (!text.startsWith('turn:') && !text.startsWith('turns:')) {
-    text = 'turn:$text';
-  }
+  final scheme = RegExp(r'^turns?:', caseSensitive: false).firstMatch(text);
+  text = scheme == null
+      ? 'turn:$text'
+      : '${scheme[0]!.toLowerCase()}${text.substring(scheme.end)}';
   final uri = Uri.tryParse(text.replaceFirst(':', '://'));
   if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty) return null;
   return text;
