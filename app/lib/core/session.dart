@@ -1265,9 +1265,7 @@ class Session extends ChangeNotifier {
       shared = true;
     }
     // So a new friend need not wait for the next beat.
-    if (shared) {
-      unawaited(presence.ping(hello: true).catchError((Object _) {}));
-    }
+    if (shared) presence.greet();
     final mine = myProfile;
     if (mine == null) return;
     for (final friend in current) {

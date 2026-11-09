@@ -248,6 +248,21 @@ void main() {
     }
     expect(carol.presence.isOnline(aliceId.publicKey), isFalse);
     expect(carol.presence.book.theirs, isEmpty);
+
+    // Hidden, Bob drops off at once and still sees Alice.
+    Future<void> aliceSeesBob(bool online) async {
+      final until = DateTime.now().add(const Duration(seconds: 10));
+      while (alice.presence.isOnline(bobId.publicKey) != online) {
+        if (DateTime.now().isAfter(until)) fail('bob never went $online');
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+    }
+
+    await bob.presence.setVisible(false);
+    await aliceSeesBob(false);
+    expect(bob.presence.isOnline(aliceId.publicKey), isTrue);
+    await bob.presence.setVisible(true);
+    await aliceSeesBob(true);
   }, timeout: const Timeout(Duration(seconds: 60)));
 
   test('profiles reach friends, including pictures and edits', () async {

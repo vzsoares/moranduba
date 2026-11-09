@@ -935,6 +935,8 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   _NotificationsSwitch(session: widget.session),
                 ],
                 const SizedBox(height: 12),
+                _OnlineSwitch(session: widget.session),
+                const SizedBox(height: 12),
                 OutlinedButton.icon(
                   icon: const Icon(Icons.settings_voice_outlined, size: 18),
                   label: const Text('Audio and sounds'),
@@ -1059,6 +1061,26 @@ class _IdentitySheetState extends State<_IdentitySheet> {
     Navigator.of(context).pop();
     await widget.onLogout();
   }
+}
+
+class _OnlineSwitch extends StatelessWidget {
+  const _OnlineSwitch({required this.session});
+
+  final Session session;
+
+  @override
+  Widget build(BuildContext context) => Panel(
+    padding: EdgeInsets.zero,
+    child: ListenableBuilder(
+      listenable: session.presence,
+      builder: (context, _) => SwitchListTile(
+        title: const Text('Show friends when I am online'),
+        subtitle: const Text('You still see which friends are online.'),
+        value: session.presence.visible,
+        onChanged: (on) => unawaited(session.presence.setVisible(on)),
+      ),
+    ),
+  );
 }
 
 class _NotificationsSwitch extends StatefulWidget {

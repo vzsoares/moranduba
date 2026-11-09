@@ -42,5 +42,18 @@ void main() {
     expect(reloaded.needsSending('bob'), isFalse);
     expect(reloaded.sharedWithAnyone, isTrue);
     expect(reloaded.theirs['bob']?.key, key);
+    expect(reloaded.hidden, isFalse);
+
+    await reloaded.setHidden(true);
+    final hidden = PresenceBook(store);
+    await hidden.load();
+    expect(hidden.hidden, isTrue);
+  });
+
+  test('pings say hello or bye, anything else is a beat', () {
+    expect(Beat.of('hello'), Beat.hello);
+    expect(Beat.of('bye'), Beat.bye);
+    expect(Beat.of(''), Beat.alive);
+    expect(Beat.of('other'), Beat.alive);
   });
 }

@@ -50,12 +50,32 @@ class PresenceKey {
   }
 }
 
+/// What a ping says besides "online".
+enum Beat {
+  alive(''),
+
+  /// Asks friends who see it to ping back.
+  hello('hello'),
+
+  /// Going hidden: friends drop the dot at once instead of after
+  /// [Presence.fresh].
+  bye('bye');
+
+  const Beat(this.content);
+
+  final String content;
+
+  static Beat of(String content) =>
+      values.where((b) => b.content == content).firstOrNull ?? alive;
+}
+
 /// Our presence key, who has it, and the friends' keys we hold.
 class PresenceBook {
   PresenceBook(this._store);
 
   final SnapshotStore _store;
   String _mine = '';
+  bool _hidden = false;
   final Map<String, String> _sent = {};
   final Map<String, PresenceKey> _theirs = {};
 
@@ -63,15 +83,23 @@ class PresenceBook {
   Map<String, PresenceKey> get theirs => Map.unmodifiable(_theirs);
   bool get sharedWithAnyone => _sent.isNotEmpty;
 
+  /// Whether we stopped telling friends we are online.
+  bool get hidden => _hidden;
+
   Future<void> load() async {
     final raw = await _store.read();
     if (raw != null) {
-      if (jsonDecode(raw) case {
+      final saved = jsonDecode(raw);
+      if (saved case {
         'mine': final String mine,
         'sent': final Map<String, Object?> sent,
         'theirs': final Map<String, Object?> theirs,
       }) {
         _mine = mine;
+        _hidden = switch (saved) {
+          {'hidden': true} => true,
+          _ => false,
+        };
         for (final MapEntry(:key, :value) in sent.entries) {
           if (value is String) _sent[key] = value;
         }
@@ -97,12 +125,18 @@ class PresenceBook {
   Future<void> _save() => _store.write(
     jsonEncode({
       'mine': _mine,
+      'hidden': _hidden,
       'sent': _sent,
       'theirs': {for (final e in _theirs.entries) e.key: e.value.encode()},
     }),
   );
 
   bool needsSending(String friend) => _sent[friend] != _mine;
+
+  Future<void> setHidden(bool hidden) async {
+    _hidden = hidden;
+    await _save();
+  }
 
   Future<void> markSent(String friend) async {
     _sent[friend] = _mine;
@@ -153,12 +187,25 @@ class Presence extends ChangeNotifier {
   DateTime? _lastReply;
   bool _closed = false;
 
-  static const _hello = 'hello';
-
   /// Answers to hellos are this far apart at least, however many arrive.
   static const _minReply = Duration(seconds: 10);
 
   PresenceKey get mine => PresenceKey(book.mine, relays);
+
+  bool get visible => !book.hidden;
+
+  /// Hidden, we still see friends; they stop seeing us.
+  Future<void> setVisible(bool visible) async {
+    if (visible == this.visible) return;
+    await book.setHidden(!visible);
+    notifyListeners();
+    if (book.sharedWithAnyone) _send(visible ? Beat.hello : Beat.bye);
+  }
+
+  /// Says hello right away, e.g. after sharing our key with a new friend.
+  void greet() {
+    if (visible && book.sharedWithAnyone) _send(Beat.hello);
+  }
 
   bool isOnline(String pubkey) {
     final seen = _seen[pubkey];
@@ -188,15 +235,14 @@ class Presence extends ChangeNotifier {
     unawaited(_resubscribe());
     // Someone's last ping may just have gone stale.
     notifyListeners();
-    if (book.sharedWithAnyone) _send();
+    if (visible && book.sharedWithAnyone) _send(Beat.alive);
   }
 
-  void _send({bool hello = false}) => unawaited(
-    ping(hello: hello).catchError((Object e) => debugPrint('presence: $e')),
+  void _send(Beat beat) => unawaited(
+    ping(beat).catchError((Object e) => debugPrint('presence: $e')),
   );
 
-  /// [hello] asks friends who see it to ping back.
-  Future<void> ping({bool hello = false}) async {
+  Future<void> ping(Beat beat) async {
     final signer = _ndk.giftWrap.eventSignerFactory.createWithNewKeyPair();
     final event = await signer.sign(
       Nip01Event(
@@ -205,7 +251,7 @@ class Presence extends ChangeNotifier {
         tags: [
           ['d', presenceTag(book.mine, DateTime.now())],
         ],
-        content: hello ? _hello : '',
+        content: beat.content,
       ),
     );
     await publishOnce(_ndk, event, relays);
@@ -244,22 +290,29 @@ class Presence extends ChangeNotifier {
     );
     _subscriptionId = response.requestId;
     _pings = response.stream.listen(_onPing);
-    if (added.isNotEmpty && book.sharedWithAnyone) _send(hello: true);
+    if (added.isNotEmpty) greet();
   }
 
   void _onPing(Nip01Event event) {
     final tag = event.getFirstTag('d');
     final friend = tag == null ? null : _tags[tag];
     if (friend == null || _closed) return;
+    final beat = Beat.of(event.content);
     final wasOnline = isOnline(friend);
+    if (beat == Beat.bye) {
+      _seen.remove(friend);
+      if (wasOnline) notifyListeners();
+      return;
+    }
     _seen[friend] = DateTime.now();
     if (!wasOnline) notifyListeners();
     final last = _lastReply;
-    if (event.content == _hello &&
+    if (beat == Beat.hello &&
+        visible &&
         book.sharedWithAnyone &&
         (last == null || DateTime.now().difference(last) > _minReply)) {
       _lastReply = DateTime.now();
-      _send();
+      _send(Beat.alive);
     }
   }
 
