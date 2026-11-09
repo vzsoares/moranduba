@@ -57,6 +57,8 @@ class SfuClient {
     start();
     final id = _newId();
     final reply = Completer<Map<String, Object?>>();
+    // close() can fail it while _send runs, before anyone listens.
+    reply.future.ignore();
     _pending[id] = (sfu: sfu, reply: reply);
     try {
       await _send(sfu, {...message, 'id': id});
