@@ -214,6 +214,42 @@ void main() {
     await _until(online, () => online.outbox.all.isEmpty);
   }, timeout: const Timeout(Duration(seconds: 60)));
 
+  test('friends see each other online; strangers learn nothing', () async {
+    final aliceId = Identity.generate();
+    final bobId = Identity.generate();
+    final carolId = Identity.generate();
+    final [alice, bob, carol] = [
+      for (final id in [aliceId, bobId, carolId])
+        await Session.start(id, relays: _relays, openStore: _memory()),
+    ];
+    addTearDown(alice.close);
+    addTearDown(bob.close);
+    addTearDown(carol.close);
+
+    await alice.requestFriend(bobId.publicKey);
+    await _until(bob, () => bob.incomingRequests.isNotEmpty);
+    await bob.acceptFriend(aliceId.publicKey);
+    // Both hold the other's key once the profile batch went out.
+    final deadline = DateTime.now().add(const Duration(seconds: 15));
+    while (alice.presence.book.theirs[bobId.publicKey] == null ||
+        bob.presence.book.theirs[aliceId.publicKey] == null) {
+      if (DateTime.now().isAfter(deadline)) fail('keys never arrived');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    expect(bob.chatWith(aliceId.publicKey), isEmpty);
+
+    // No beat is due for minutes: hellos and their answers do it.
+    while (!bob.presence.isOnline(aliceId.publicKey) ||
+        !alice.presence.isOnline(bobId.publicKey)) {
+      if (DateTime.now().isAfter(deadline.add(const Duration(seconds: 10)))) {
+        fail('presence never arrived');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    expect(carol.presence.isOnline(aliceId.publicKey), isFalse);
+    expect(carol.presence.book.theirs, isEmpty);
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
   test('profiles reach friends, including pictures and edits', () async {
     final server = await FakeBlossom.start();
     addTearDown(server.close);

@@ -4,7 +4,8 @@ import '../core/session.dart';
 import 'manga.dart';
 import 'theme.dart';
 
-/// [pubkey]'s profile picture, or the placeholder while it loads.
+/// [pubkey]'s profile picture, or the placeholder while it loads, with a
+/// dot while they are online.
 class PersonAvatar extends StatelessWidget {
   const PersonAvatar({
     super.key,
@@ -20,11 +21,41 @@ class PersonAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ref = session.profiles.of(pubkey)?.picture;
-    if (ref == null) return Avatar(size: size);
-    return FutureBuilder(
-      key: ValueKey(ref.url),
-      future: session.picture(pubkey),
-      builder: (_, snapshot) => Avatar(size: size, picture: snapshot.data),
+    final avatar = ref == null
+        ? Avatar(size: size)
+        : FutureBuilder(
+            key: ValueKey(ref.url),
+            future: session.picture(pubkey),
+            builder: (_, snapshot) =>
+                Avatar(size: size, picture: snapshot.data),
+          );
+    final dot = (size * 0.3).clamp(8.0, 14.0);
+    return ListenableBuilder(
+      listenable: session.presence,
+      builder: (context, child) => Stack(
+        clipBehavior: Clip.none,
+        children: [
+          child!,
+          if (session.presence.isOnline(pubkey))
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Tooltip(
+                message: 'Online',
+                child: Container(
+                  width: dot,
+                  height: dot,
+                  decoration: BoxDecoration(
+                    color: MangaColors.online,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: MangaColors.paper, width: 2),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+      child: avatar,
     );
   }
 }

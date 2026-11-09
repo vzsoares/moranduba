@@ -29,6 +29,7 @@ import 'hotkeys.dart';
 import 'identity.dart';
 import 'network.dart';
 import 'outbox.dart';
+import 'presence.dart';
 import 'profiles.dart';
 import 'publish.dart';
 import 'push/push.dart';
@@ -56,6 +57,7 @@ class Session extends ChangeNotifier {
     this.audio,
     this.hotkeys,
     this.network,
+    this._presenceBook,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -117,6 +119,10 @@ class Session extends ChangeNotifier {
       await openStore('${identity.publicKey}-hotkeys'),
     );
     await hotkeyBook.load();
+    final presenceBook = PresenceBook(
+      await openStore('${identity.publicKey}-presence'),
+    );
+    await presenceBook.load();
     final session = Session._(
       identity,
       ndk,
@@ -135,12 +141,14 @@ class Session extends ChangeNotifier {
       audioPrefs,
       hotkeyBook,
       network,
+      presenceBook,
     );
     await session._init();
     if (openGroupEngine != null) {
       await session._startGroups(openGroupEngine, files);
     }
     unawaited(session._flushOutbox());
+    session.presence.start();
     session._shareProfileSoon();
     session._pruneTimer = Timer.periodic(
       const Duration(seconds: 30),
@@ -175,6 +183,11 @@ class Session extends ChangeNotifier {
   /// Relays and Blossom servers chosen on this device; they apply on the
   /// next start.
   final NetworkBook network;
+
+  final PresenceBook _presenceBook;
+
+  /// Which friends are online; see [Presence].
+  late final Presence presence = Presence(_ndk, _presenceBook, relays: relays);
 
   /// Blossom servers attachments go to.
   List<String> get blossomServers => _blossom.servers;
@@ -350,6 +363,10 @@ class Session extends ChangeNotifier {
         if (profile != null &&
             await profiles.put(message.peerPubKey, profile)) {
           notifyListeners();
+        }
+      case Control.presence when !message.isOutgoing:
+        if (PresenceKey.decode(message.content) case final key?) {
+          await presence.learn(message.peerPubKey, key);
         }
       case Control.expiry:
         final timer = ChatExpiry.decode(message.content);
@@ -1237,9 +1254,23 @@ class Session extends ChangeNotifier {
   }
 
   Future<void> _shareProfile() async {
+    if (_closed) return;
+    final current = friends;
+    presence.watch(current);
+    var shared = false;
+    for (final friend in current) {
+      if (!_presenceBook.needsSending(friend)) continue;
+      await _send(friend, presence.mine.encode(), Control.presence.tags);
+      await _presenceBook.markSent(friend);
+      shared = true;
+    }
+    // So a new friend need not wait for the next beat.
+    if (shared) {
+      unawaited(presence.ping(hello: true).catchError((Object _) {}));
+    }
     final mine = myProfile;
-    if (mine == null || _closed) return;
-    for (final friend in friends) {
+    if (mine == null) return;
+    for (final friend in current) {
       if (!profiles.needsSending(friend, mine)) continue;
       await _send(friend, mine.encode(), Control.profile.tags);
       await profiles.markSent(friend, mine);
@@ -1507,6 +1538,7 @@ class Session extends ChangeNotifier {
     await audio.wipe();
     await hotkeys.wipe();
     await network.wipe();
+    await _presenceBook.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
@@ -1521,6 +1553,7 @@ class Session extends ChangeNotifier {
     _pushTimer?.cancel();
     _outboxTimer?.cancel();
     await _notices.close();
+    await presence.close();
     await calls?.close();
     await sfuClient.close();
     await stopHosting();
