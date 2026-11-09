@@ -1,9 +1,10 @@
 import 'dart:convert';
 
 import '../groups/mls_bridge.dart';
+import '../sounds.dart';
 
-/// Microphone, speaker and voice processing for calls, kept on this device.
-/// Null devices mean the system default.
+/// Microphone, speaker, voice processing and app sounds, kept on this
+/// device. Null devices mean the system default.
 class AudioPrefs {
   const AudioPrefs({
     this.input,
@@ -13,6 +14,7 @@ class AudioPrefs {
     this.autoGain = true,
     this.inputVolume = 1,
     this.outputVolume = 1,
+    this.sounds = const {},
   });
 
   final String? input;
@@ -24,6 +26,11 @@ class AudioPrefs {
   /// Microphone and overall playback levels, 0 to 2.
   final double inputVolume;
   final double outputVolume;
+
+  /// Picked tones; a sound missing here plays its default.
+  final Map<Sound, Tone> sounds;
+
+  Tone toneFor(Sound sound) => sounds[sound] ?? sound.byDefault;
 
   /// getUserMedia audio constraints.
   Map<String, Object> constraints() => {
@@ -41,6 +48,7 @@ class AudioPrefs {
     bool? autoGain,
     double? inputVolume,
     double? outputVolume,
+    Map<Sound, Tone>? sounds,
   }) => AudioPrefs(
     input: input == null ? this.input : input(),
     output: output == null ? this.output : output(),
@@ -49,6 +57,7 @@ class AudioPrefs {
     autoGain: autoGain ?? this.autoGain,
     inputVolume: inputVolume ?? this.inputVolume,
     outputVolume: outputVolume ?? this.outputVolume,
+    sounds: sounds ?? this.sounds,
   );
 
   Map<String, Object?> toJson() => {
@@ -59,6 +68,9 @@ class AudioPrefs {
     'auto_gain': autoGain,
     'input_volume': inputVolume,
     'output_volume': outputVolume,
+    'sounds': {
+      for (final MapEntry(:key, :value) in sounds.entries) key.name: value.name,
+    },
   };
 
   static AudioPrefs fromJson(Object? json) => switch (json) {
@@ -76,6 +88,13 @@ class AudioPrefs {
       autoGain: map['auto_gain'] != false,
       inputVolume: _level(map['input_volume']),
       outputVolume: _level(map['output_volume']),
+      sounds: switch (map['sounds']) {
+        final Map<String, Object?> picked => {
+          for (final sound in Sound.values)
+            sound: ?Tone.named(picked[sound.name]),
+        },
+        _ => const {},
+      },
     ),
     _ => const AudioPrefs(),
   };

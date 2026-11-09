@@ -9,6 +9,7 @@ import '../core/groups/groups.dart';
 import '../core/groups/space.dart';
 import '../core/identity.dart';
 import '../core/session.dart';
+import '../core/sounds.dart';
 import 'audio_settings.dart';
 import 'chat_page.dart';
 import 'groups_page.dart';
@@ -17,6 +18,7 @@ import 'manga.dart';
 import 'notifications/notifications.dart';
 import 'people.dart';
 import 'profile_editor.dart';
+import 'ring_tone.dart';
 import 'search.dart';
 import 'server_settings.dart';
 import 'status_page.dart';
@@ -47,16 +49,25 @@ class _HomePageState extends State<HomePage>
 
   Session get session => widget.session;
   late final StreamSubscription<Notice> _notices;
+  late final StreamSubscription<Notice> _sounds;
 
   @override
   void initState() {
     super.initState();
+    primeTones();
     _notices = showNotices(session);
+    _sounds = session.notices.listen(
+      (notice) => playSound(session, switch (notice.kind) {
+        NoticeKind.message => Sound.message,
+        NoticeKind.invite => Sound.invite,
+      }),
+    );
   }
 
   @override
   void dispose() {
     unawaited(_notices.cancel());
+    unawaited(_sounds.cancel());
     _tabs.dispose();
     super.dispose();
   }
@@ -926,7 +937,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   icon: const Icon(Icons.settings_voice_outlined, size: 18),
-                  label: const Text('Audio: microphone and speaker'),
+                  label: const Text('Audio and sounds'),
                   onPressed: () => showAudioSettings(context, widget.session),
                 ),
                 const SizedBox(height: 8),

@@ -11,6 +11,7 @@ import '../core/calls/calls.dart';
 import '../core/calls/group_call.dart';
 import '../core/calls/screen_capture.dart';
 import '../core/session.dart';
+import '../core/sounds.dart';
 import 'audio_settings.dart';
 import 'fullscreen.dart';
 import 'group_conversation.dart';
@@ -126,7 +127,10 @@ class _CallPageState extends State<CallPage> {
   GroupCall get call => widget.call;
 
   /// The caller hears this until someone answers, for at most 15 s.
-  final _ringback = RingTone.ringback();
+  late final _ringback = RingTone(
+    Sound.ringback,
+    () => session.audio.current.toneFor(Sound.ringback),
+  );
   Timer? _ringbackLimit;
 
   final _quality = ValueNotifier<Map<String, LinkQuality>>(const {});

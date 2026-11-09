@@ -295,6 +295,7 @@ class Session extends ChangeNotifier {
       started.addListener(_announceServersSoon);
       started.addListener(_syncAllowlistsSoon);
       started.addListener(_syncPushSoon);
+      started.invited.listen(_onInvited);
       // Welcomes that arrived before groups were up.
       for (final wrapped in _unhandledWraps) {
         await started.onGiftWrap(wrapped);
@@ -319,18 +320,29 @@ class Session extends ChangeNotifier {
     }
     if (!_seen.add(message.id)) return;
     dms.put(message.id, wrapped);
-    if (!message.isOutgoing &&
-        message.createdAt >= _startedAt &&
-        Control.of(message.rumor) == null) {
-      _notices.add(
-        Notice(
-          chat: dmChat(message.peerPubKey),
-          title: displayName(message.peerPubKey),
-          body: message.fileMetadata == null
-              ? message.content
-              : 'Sent ${dmFileName(message)}',
-        ),
-      );
+    if (!message.isOutgoing && message.createdAt >= _startedAt) {
+      switch (Control.of(message.rumor)) {
+        case null:
+          _notices.add(
+            Notice(
+              chat: dmChat(message.peerPubKey),
+              title: displayName(message.peerPubKey),
+              body: message.fileMetadata == null
+                  ? message.content
+                  : 'Sent ${dmFileName(message)}',
+            ),
+          );
+        case Control.friendRequest:
+          _notices.add(
+            Notice(
+              chat: dmChat(message.peerPubKey),
+              title: displayName(message.peerPubKey),
+              body: 'Wants to be your friend',
+              kind: NoticeKind.invite,
+            ),
+          );
+        case _:
+      }
     }
     switch (Control.of(message.rumor)) {
       case Control.profile when !message.isOutgoing:
@@ -360,8 +372,21 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// New messages from others, for notifications.
+  /// New messages and invites from others, for notifications and sounds.
   Stream<Notice> get notices => _notices.stream;
+
+  void _onInvited(({GroupInvite invite, int createdAt}) invited) {
+    if (invited.createdAt < _startedAt || _closed) return;
+    final GroupInvite(:id, :inviter, :groupName) = invited.invite;
+    _notices.add(
+      Notice(
+        chat: 'invite:$id',
+        title: displayName(inviter),
+        body: 'Invited you to $groupName',
+        kind: NoticeKind.invite,
+      ),
+    );
+  }
 
   void _onGroupMessage(GroupMessage message) {
     if (message.createdAt < _startedAt || _closed) return;
@@ -1538,11 +1563,19 @@ class SearchHit {
   final int createdAt;
 }
 
-class Notice {
-  const Notice({required this.chat, required this.title, required this.body});
+enum NoticeKind { message, invite }
 
-  /// From [dmChat] or [groupChat].
+class Notice {
+  const Notice({
+    required this.chat,
+    required this.title,
+    required this.body,
+    this.kind = NoticeKind.message,
+  });
+
+  /// From [dmChat] or [groupChat]; `invite:<id>` for a group invite.
   final String chat;
   final String title;
   final String body;
+  final NoticeKind kind;
 }
