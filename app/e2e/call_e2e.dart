@@ -16,6 +16,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web/web.dart' as web;
+import 'package:moranduba/core/calls/call_quality.dart';
 import 'package:moranduba/core/calls/group_call.dart';
 import 'package:moranduba/core/calls/sfu_client.dart';
 import 'package:moranduba/core/groups/group_engine.dart';
@@ -141,6 +142,16 @@ Future<void> _connected(Session session, GroupCall call, String peer) async {
   if (cryptors is! Map || !cryptors.values.contains('FrameCryptorStateOk')) {
     throw StateError('no cryptor reported Ok: $cryptors');
   }
+  await _until('link quality', () async {
+    final link = (await call.quality())[peer];
+    if (link == null || link.level == QualityLevel.unknown) return false;
+    _log(
+      'quality ${link.level.name}: delay ${link.roundTrip?.inMilliseconds} ms, '
+      'loss ${link.loss}, jitter ${link.jitter?.inMilliseconds} ms',
+    );
+    return link.roundTrip != null && link.loss != null;
+  });
+  _log('shot quality');
 }
 
 /// Creates the group, calls, shares a screen, then sends under a key Bob
