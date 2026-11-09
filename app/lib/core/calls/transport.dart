@@ -195,7 +195,9 @@ Future<(RTCRtpTransceiver, bool)> addEncryptedVideo(
           kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
           init: init,
         );
-  if (sending != null) await host.crypto.encrypt(transceiver.sender, host.me);
+  if (sending != null) {
+    await host.crypto.encrypt(transceiver.sender, host.me, link: pc);
+  }
   if (blank != null) {
     await transceiver.sender.replaceTrack(null);
     await blank.stop();
@@ -217,7 +219,7 @@ Future<RTCRtpSender?> encryptOfferedVideo(
   final sender = stream == null
       ? await pc.addTrack(blank)
       : await pc.addTrack(blank, stream);
-  await host.crypto.encrypt(sender, host.me);
+  await host.crypto.encrypt(sender, host.me, link: pc);
   await sender.replaceTrack(null);
   await blank.stop();
   return sender;

@@ -95,7 +95,7 @@ class SfuTransport implements CallTransport {
           streams: streams,
         ),
       );
-      await _host.crypto.encrypt(transceiver.sender, _host.me);
+      await _host.crypto.encrypt(transceiver.sender, _host.me, link: pc);
       _audio.add(transceiver.sender);
     }
     final camera = _host.outgoingTracks
@@ -146,8 +146,9 @@ class SfuTransport implements CallTransport {
     if (participant == _host.me) return;
     // On web the page hook attached the receiver already.
     final receiver = event.receiver;
-    if (receiver != null && !receiversHandledByPage) {
-      unawaited(_host.crypto.decrypt(receiver, participant));
+    final pc = _pc;
+    if (receiver != null && pc != null && !receiversHandledByPage) {
+      unawaited(_host.crypto.decrypt(receiver, participant, link: pc));
     }
     _streams[participant] = stream;
     _host.remoteStream(participant, stream);
@@ -235,10 +236,11 @@ class SfuTransport implements CallTransport {
   @override
   Future<void> replaceVideo(MediaStreamTrack? track) async {
     final sender = _video;
-    if (sender == null) return;
+    final pc = _pc;
+    if (sender == null || pc == null) return;
     await replaceTrackSettled(sender, track);
     if (track != null && !_videoEncrypted) {
-      await _host.crypto.encrypt(sender, _host.me);
+      await _host.crypto.encrypt(sender, _host.me, link: pc);
       _videoEncrypted = true;
     }
   }
@@ -271,6 +273,7 @@ class SfuTransport implements CallTransport {
     _closed = true;
     final pc = _pc;
     _pc = null;
+    if (pc != null) await _host.crypto.release(pc);
     try {
       await _channel?.close();
       await pc?.close();

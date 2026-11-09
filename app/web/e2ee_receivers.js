@@ -45,7 +45,18 @@
           trackId,
         });
         event.receiver.transform = transform;
-        (e2ee.receivers ??= []).push({ receiver: event.receiver, transform, pc: this });
+        // Links close all call long (redials, relays, mode switches).
+        e2ee.receivers = (e2ee.receivers ?? []).filter((entry) => {
+          if (entry.pc.connectionState !== "closed") return true;
+          delete e2ee.states[entry.trackId];
+          worker.postMessage({
+            msgType: "dispose",
+            msgId: Math.random().toString(36).slice(2),
+            trackId: entry.trackId,
+          });
+          return false;
+        });
+        e2ee.receivers.push({ receiver: event.receiver, transform, pc: this, trackId });
         e2ee.states[trackId] = "new";
         // The worker builds its cryptor disabled once the transform lands.
         let tries = 0;

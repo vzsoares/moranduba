@@ -655,6 +655,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     'mode': mode,
     'sfu': ?_transport.sfu,
     'keyIndex': crypto.keyIndex,
+    'cryptoLinks': crypto.linkCount,
     'epoch': _keyEpoch,
     'links': {
       for (final entry in (await _transport.stats()).entries)

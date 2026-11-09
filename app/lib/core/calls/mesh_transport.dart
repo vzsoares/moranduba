@@ -124,8 +124,11 @@ class MeshTransport implements CallTransport {
           RTCSessionDescription(_sdp(from, sdp), 'answer'),
         );
       case SignalType.relayOffer:
+        // A relay planned from reports older than our direct link is moot.
         if (signal.origin case final origin?
-            when origin != _host.me && origin != from) {
+            when origin != _host.me &&
+                origin != from &&
+                !_connected.contains(origin)) {
           await _acceptRelay(from, origin, sdp);
         }
       case SignalType.relayAnswer:
@@ -191,13 +194,13 @@ class MeshTransport implements CallTransport {
           ? await pc.addTrack(track)
           : await pc.addTrack(track, stream);
       _encrypted.add(sender.senderId);
-      await _host.crypto.encrypt(sender, _host.me);
+      await _host.crypto.encrypt(sender, _host.me, link: pc);
     }
     if (!_host.outgoingTracks.any((t) => t.kind == 'video')) {
       await _videoSlot(pc, answering: offer != null);
     }
     for (final transceiver in await pc.getTransceivers()) {
-      await _host.crypto.decrypt(transceiver.receiver, participant);
+      await _host.crypto.decrypt(transceiver.receiver, participant, link: pc);
     }
     return pc;
   }
@@ -240,7 +243,7 @@ class MeshTransport implements CallTransport {
       // attached them, since this callback runs too late there.
       final receiver = event.receiver;
       if (receiver != null && !receiversHandledByPage) {
-        unawaited(_host.crypto.decrypt(receiver, participant));
+        unawaited(_host.crypto.decrypt(receiver, participant, link: pc));
       }
       if (_links[participant] != pc) return;
       if (event.streams.firstOrNull case final stream?) {
@@ -258,6 +261,7 @@ class MeshTransport implements CallTransport {
           final changed =
               _connected.add(participant) | _failed.remove(participant);
           _show(participant);
+          unawaited(_closeIncoming(participant));
           if (changed) _linksChanged();
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
           unawaited(_linkFailed(participant));
@@ -382,7 +386,7 @@ class MeshTransport implements CallTransport {
         // On the web a clone, so our own deafen or mute does not reach it.
         final forwarded = kIsWeb ? await track.clone() : track;
         final sender = await relay.addTrack(forwarded, stream);
-        await _host.crypto.encrypt(sender, _host.me);
+        await _host.crypto.encrypt(sender, _host.me, link: relay);
       }
       await relay.setLocalDescription(await relay.createOffer());
       final offer = await gatheredDescription(relay);
@@ -439,7 +443,7 @@ class MeshTransport implements CallTransport {
     pc.onTrack = (event) {
       final receiver = event.receiver;
       if (receiver != null && !receiversHandledByPage) {
-        unawaited(_host.crypto.decrypt(receiver, origin));
+        unawaited(_host.crypto.decrypt(receiver, origin, link: pc));
       }
       if (_incoming[origin] != incoming) return;
       if (event.streams.firstOrNull case final stream?) {
@@ -463,7 +467,7 @@ class MeshTransport implements CallTransport {
     };
     await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
     for (final transceiver in await pc.getTransceivers()) {
-      await _host.crypto.decrypt(transceiver.receiver, origin);
+      await _host.crypto.decrypt(transceiver.receiver, origin, link: pc);
     }
     await pc.setLocalDescription(await pc.createAnswer());
     final answer = await gatheredDescription(pc);
@@ -517,6 +521,7 @@ class MeshTransport implements CallTransport {
   }
 
   Future<void> _closeQuietly(RTCPeerConnection pc, String what) async {
+    await _host.crypto.release(pc);
     try {
       await pc.close();
     } catch (e) {
@@ -545,7 +550,7 @@ class MeshTransport implements CallTransport {
         if (kind != 'video') continue;
         await replaceTrackSettled(sender, track);
         if (track != null && _encrypted.add(sender.senderId)) {
-          await _host.crypto.encrypt(sender, _host.me);
+          await _host.crypto.encrypt(sender, _host.me, link: pc);
         }
       }
     }

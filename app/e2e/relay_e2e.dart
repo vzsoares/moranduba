@@ -2,7 +2,8 @@
 // pages: ROLES=alice,bob,carol ./e2e/run.sh e2e/relay_e2e.dart
 // Alice and Bob strip every ICE candidate from their direct link, so it
 // fails and Carol has to relay their media. Then they let candidates
-// through again, and the direct link takes over without a gap.
+// through again, and the direct link takes over without a gap. Closed
+// links must release their frame cryptors.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
 
@@ -66,6 +67,22 @@ Future<Map<Object?, Object?>> _link(GroupCall call, String peer) async {
     },
     _ => const {},
   };
+}
+
+/// Peer connections that still hold frame cryptors.
+Future<int> _cryptoLinks(GroupCall call) async =>
+    switch ((await call.stats())['cryptoLinks']) {
+      final int links => links,
+      _ => -1,
+    };
+
+Future<void> _cryptoLinksBack(GroupCall call) async {
+  await _until(
+    'cryptors of closed links released',
+    () async => await _cryptoLinks(call) == 2,
+    timeout: const Duration(seconds: 60),
+  );
+  _log('cryptors held by 2 links');
 }
 
 Future<int> _frames(GroupCall call, String peer) async =>
@@ -211,11 +228,21 @@ Future<void> _relayed(GroupCall call, String far) async {
     throw StateError('video stopped for ${gap.inSeconds} s while switching');
   }
   _log('direct again, longest gap ${gap.inMilliseconds} ms');
+  await _cryptoLinksBack(call);
   await Future<void>.delayed(const Duration(seconds: 5));
 }
 
-/// Carol: stays until both have left.
+/// Carol: relays, drops the relay links once Alice and Bob connect, and
+/// stays until both have left.
 Future<void> _carolStays(GroupCall call) async {
+  // Two direct links plus one relay link to each end.
+  await _until(
+    'relaying',
+    () async => await _cryptoLinks(call) >= 4,
+    timeout: const Duration(seconds: 60),
+  );
+  _log('relaying');
+  await _cryptoLinksBack(call);
   await _until(
     'alice and bob leave',
     () => call.participants.isEmpty,

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'receiver_e2ee.dart';
@@ -50,7 +50,19 @@ class CallCrypto {
     }
   }
 
-  Future<void> encrypt(RTCRtpSender sender, String me) async {
+  /// Cryptors by the link they belong to, so [release] can drop them when
+  /// it closes.
+  final Map<RTCPeerConnection, List<FrameCryptor>> _byLink = {};
+  final Map<FrameCryptor, String> _receiverTracks = {};
+
+  /// Links that still hold cryptors.
+  int get linkCount => _byLink.length;
+
+  Future<void> encrypt(
+    RTCRtpSender sender,
+    String me, {
+    required RTCPeerConnection link,
+  }) async {
     final cryptor = await frameCryptorFactory.createFrameCryptorForRtpSender(
       participantId: me,
       sender: sender,
@@ -59,6 +71,7 @@ class CallCrypto {
     );
     _watch(cryptor, 'out:${sender.track?.kind}:${sender.track?.id}');
     _senders.add(cryptor);
+    (_byLink[link] ??= []).add(cryptor);
     await _apply(cryptor);
   }
 
@@ -67,7 +80,11 @@ class CallCrypto {
   /// Attach right after the transceiver exists: Chrome ignores a receiver
   /// transform added once frames may have arrived. Returns false when the
   /// receiver has no track yet or is already handled.
-  Future<bool> decrypt(RTCRtpReceiver receiver, String participant) async {
+  Future<bool> decrypt(
+    RTCRtpReceiver receiver,
+    String participant, {
+    required RTCPeerConnection link,
+  }) async {
     final trackId = receiver.track?.id;
     if (trackId == null || !_decrypting.add(trackId)) return false;
     final cryptor = await frameCryptorFactory.createFrameCryptorForRtpReceiver(
@@ -78,8 +95,31 @@ class CallCrypto {
     );
     _watch(cryptor, 'in:${receiver.track?.kind}:${receiver.track?.id}');
     _receivers.add(cryptor);
+    _receiverTracks[cryptor] = trackId;
+    (_byLink[link] ??= []).add(cryptor);
     await _apply(cryptor);
     return true;
+  }
+
+  /// Disposes [link]'s cryptors; call before closing it. Links come and go
+  /// all call long (redials, relays, mode switches).
+  Future<void> release(RTCPeerConnection link) async {
+    final cryptors = _byLink.remove(link) ?? const <FrameCryptor>[];
+    for (final cryptor in cryptors) {
+      _senders.remove(cryptor);
+      _receivers.remove(cryptor);
+      if (_receiverTracks.remove(cryptor) case final trackId?) {
+        _decrypting.remove(trackId);
+      }
+      final label = _labels.remove(cryptor);
+      // The same local track is encrypted once per link, under one label.
+      if (label != null && !_labels.containsValue(label)) states.remove(label);
+      try {
+        await cryptor.dispose();
+      } catch (e) {
+        debugPrint('dispose cryptor $label: $e');
+      }
+    }
   }
 
   /// On web the worker builds its cryptor only when the first encoded frame
@@ -134,6 +174,8 @@ class CallCrypto {
     }
     _senders.clear();
     _receivers.clear();
+    _byLink.clear();
+    _receiverTracks.clear();
     await _keys.dispose();
   }
 }
