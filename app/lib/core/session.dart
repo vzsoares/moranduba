@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -28,6 +29,7 @@ import 'hotkeys.dart';
 import 'identity.dart';
 import 'network.dart';
 import 'outbox.dart';
+import 'presence.dart';
 import 'profiles.dart';
 import 'publish.dart';
 import 'push/push.dart';
@@ -55,6 +57,7 @@ class Session extends ChangeNotifier {
     this.audio,
     this.hotkeys,
     this.network,
+    this._presenceBook,
   );
 
   /// Groups stay off when [openGroupEngine] is null or fails; see
@@ -116,6 +119,10 @@ class Session extends ChangeNotifier {
       await openStore('${identity.publicKey}-hotkeys'),
     );
     await hotkeyBook.load();
+    final presenceBook = PresenceBook(
+      await openStore('${identity.publicKey}-presence'),
+    );
+    await presenceBook.load();
     final session = Session._(
       identity,
       ndk,
@@ -134,12 +141,14 @@ class Session extends ChangeNotifier {
       audioPrefs,
       hotkeyBook,
       network,
+      presenceBook,
     );
     await session._init();
     if (openGroupEngine != null) {
       await session._startGroups(openGroupEngine, files);
     }
     unawaited(session._flushOutbox());
+    session.presence.start();
     session._shareProfileSoon();
     session._pruneTimer = Timer.periodic(
       const Duration(seconds: 30),
@@ -174,6 +183,11 @@ class Session extends ChangeNotifier {
   /// Relays and Blossom servers chosen on this device; they apply on the
   /// next start.
   final NetworkBook network;
+
+  final PresenceBook _presenceBook;
+
+  /// Which friends are online; see [Presence].
+  late final Presence presence = Presence(_ndk, _presenceBook, relays: relays);
 
   /// Blossom servers attachments go to.
   List<String> get blossomServers => _blossom.servers;
@@ -213,6 +227,10 @@ class Session extends ChangeNotifier {
   bool _push = false;
   final Set<String> _pushReady = {};
   final Set<String> _pushTrying = {};
+
+  /// SFUs that failed or refused us, with when and how long to wait; each
+  /// ping is a relay post, and group activity asks again.
+  final Map<String, ({DateTime at, Duration wait})> _pushBackoff = {};
   Timer? _pushTimer;
   Timer? _profileTimer;
   Timer? _pruneTimer;
@@ -290,6 +308,7 @@ class Session extends ChangeNotifier {
       started.addListener(_announceServersSoon);
       started.addListener(_syncAllowlistsSoon);
       started.addListener(_syncPushSoon);
+      started.invited.listen(_onInvited);
       // Welcomes that arrived before groups were up.
       for (final wrapped in _unhandledWraps) {
         await started.onGiftWrap(wrapped);
@@ -314,18 +333,29 @@ class Session extends ChangeNotifier {
     }
     if (!_seen.add(message.id)) return;
     dms.put(message.id, wrapped);
-    if (!message.isOutgoing &&
-        message.createdAt >= _startedAt &&
-        Control.of(message.rumor) == null) {
-      _notices.add(
-        Notice(
-          chat: dmChat(message.peerPubKey),
-          title: displayName(message.peerPubKey),
-          body: message.fileMetadata == null
-              ? message.content
-              : 'Sent ${dmFileName(message)}',
-        ),
-      );
+    if (!message.isOutgoing && message.createdAt >= _startedAt) {
+      switch (Control.of(message.rumor)) {
+        case null:
+          _notices.add(
+            Notice(
+              chat: dmChat(message.peerPubKey),
+              title: displayName(message.peerPubKey),
+              body: message.fileMetadata == null
+                  ? message.content
+                  : 'Sent ${dmFileName(message)}',
+            ),
+          );
+        case Control.friendRequest:
+          _notices.add(
+            Notice(
+              chat: dmChat(message.peerPubKey),
+              title: displayName(message.peerPubKey),
+              body: 'Wants to be your friend',
+              kind: NoticeKind.invite,
+            ),
+          );
+        case _:
+      }
     }
     switch (Control.of(message.rumor)) {
       case Control.profile when !message.isOutgoing:
@@ -333,6 +363,10 @@ class Session extends ChangeNotifier {
         if (profile != null &&
             await profiles.put(message.peerPubKey, profile)) {
           notifyListeners();
+        }
+      case Control.presence when !message.isOutgoing:
+        if (PresenceKey.decode(message.content) case final key?) {
+          await presence.learn(message.peerPubKey, key);
         }
       case Control.expiry:
         final timer = ChatExpiry.decode(message.content);
@@ -355,8 +389,21 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// New messages from others, for notifications.
+  /// New messages and invites from others, for notifications and sounds.
   Stream<Notice> get notices => _notices.stream;
+
+  void _onInvited(({GroupInvite invite, int createdAt}) invited) {
+    if (invited.createdAt < _startedAt || _closed) return;
+    final GroupInvite(:id, :inviter, :groupName) = invited.invite;
+    _notices.add(
+      Notice(
+        chat: 'invite:$id',
+        title: displayName(inviter),
+        body: 'Invited you to $groupName',
+        kind: NoticeKind.invite,
+      ),
+    );
+  }
 
   void _onGroupMessage(GroupMessage message) {
     if (message.createdAt < _startedAt || _closed) return;
@@ -790,23 +837,40 @@ class Session extends ChangeNotifier {
   Future<void> _syncPush() async {
     final g = groups;
     if (g == null || _closed) return;
+    final now = DateTime.now();
     final sfus = {for (final space in g.spaces) ..._sfusOf(space.id)}
       ..removeAll(_pushReady)
-      ..removeAll(_pushTrying);
+      ..removeAll(_pushTrying)
+      ..removeWhere((sfu) {
+        final backoff = _pushBackoff[sfu];
+        return backoff != null && now.isBefore(backoff.at.add(backoff.wait));
+      });
     _pushTrying.addAll(sfus);
     await Future.wait([
       for (final sfu in sfus)
         _subscribePush(sfu)
-            .catchError((Object e) => debugPrint('push via $sfu: $e'))
+            .catchError((Object e) {
+              debugPrint('push via $sfu: $e');
+              _backOffPush(sfu);
+            })
             .whenComplete(() => _pushTrying.remove(sfu)),
     ]);
+  }
+
+  void _backOffPush(String sfu) {
+    final last = _pushBackoff[sfu]?.wait;
+    final wait = last == null
+        ? const Duration(seconds: 10)
+        : Duration(seconds: min(last.inSeconds * 2, 600));
+    _pushBackoff[sfu] = (at: DateTime.now(), wait: wait);
+    _syncPushSoon(after: wait);
   }
 
   Future<void> _subscribePush(String sfu) async {
     final pong = await pingServer(sfu);
     // The owner's allowlist update may still be on its way.
     if (pong['allowed'] != true) {
-      _syncPushSoon(after: const Duration(seconds: 10));
+      _backOffPush(sfu);
       return;
     }
     final key = pong['push_key'];
@@ -815,6 +879,7 @@ class Session extends ChangeNotifier {
     if (target == null) return;
     await sfuClient.request(sfu, target.toRequest());
     _pushReady.add(sfu);
+    _pushBackoff.remove(sfu);
   }
 
   /// Asks the group's SFUs to ring the other members' devices when we start
@@ -1189,9 +1254,21 @@ class Session extends ChangeNotifier {
   }
 
   Future<void> _shareProfile() async {
+    if (_closed) return;
+    final current = friends;
+    presence.watch(current);
+    var shared = false;
+    for (final friend in current) {
+      if (!_presenceBook.needsSending(friend)) continue;
+      await _send(friend, presence.mine.encode(), Control.presence.tags);
+      await _presenceBook.markSent(friend);
+      shared = true;
+    }
+    // So a new friend need not wait for the next beat.
+    if (shared) presence.greet();
     final mine = myProfile;
-    if (mine == null || _closed) return;
-    for (final friend in friends) {
+    if (mine == null) return;
+    for (final friend in current) {
       if (!profiles.needsSending(friend, mine)) continue;
       await _send(friend, mine.encode(), Control.profile.tags);
       await profiles.markSent(friend, mine);
@@ -1424,18 +1501,8 @@ class Session extends ChangeNotifier {
       discoveryRelays: relays,
     );
     final [delivered, _] = await Future.wait([
-      acceptedByAny(
-        _ndk.broadcast.broadcast(
-          nostrEvent: await wrapFor(pubkey),
-          specificRelays: theirRelays ?? relays,
-        ),
-      ),
-      acceptedByAny(
-        _ndk.broadcast.broadcast(
-          nostrEvent: await wrapFor(identity.publicKey),
-          specificRelays: relays,
-        ),
-      ),
+      publishOnce(_ndk, await wrapFor(pubkey), theirRelays ?? relays),
+      publishOnce(_ndk, await wrapFor(identity.publicKey), relays),
     ]);
     if (!delivered) {
       throw StateError('No relay accepted the message');
@@ -1469,6 +1536,7 @@ class Session extends ChangeNotifier {
     await audio.wipe();
     await hotkeys.wipe();
     await network.wipe();
+    await _presenceBook.wipe();
     await calls?.close();
     await groups?.wipe();
     await close();
@@ -1483,6 +1551,7 @@ class Session extends ChangeNotifier {
     _pushTimer?.cancel();
     _outboxTimer?.cancel();
     await _notices.close();
+    await presence.close();
     await calls?.close();
     await sfuClient.close();
     await stopHosting();
@@ -1525,11 +1594,19 @@ class SearchHit {
   final int createdAt;
 }
 
-class Notice {
-  const Notice({required this.chat, required this.title, required this.body});
+enum NoticeKind { message, invite }
 
-  /// From [dmChat] or [groupChat].
+class Notice {
+  const Notice({
+    required this.chat,
+    required this.title,
+    required this.body,
+    this.kind = NoticeKind.message,
+  });
+
+  /// From [dmChat] or [groupChat]; `invite:<id>` for a group invite.
   final String chat;
   final String title;
   final String body;
+  final NoticeKind kind;
 }

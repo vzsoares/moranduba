@@ -48,6 +48,8 @@ class Groups extends ChangeNotifier {
   final Map<String, Future<Uint8List>> _media = {};
   final _signals = StreamController<GroupSignal>.broadcast();
   final _incoming = StreamController<GroupMessage>.broadcast();
+  final _invited =
+      StreamController<({GroupInvite invite, int createdAt})>.broadcast();
 
   List<GroupInfo> _groups = [];
   List<GroupInvite> _invites = [];
@@ -81,6 +83,10 @@ class Groups extends ChangeNotifier {
   ];
 
   List<GroupInvite> get invites => List.unmodifiable(_invites);
+
+  /// Invites as they arrive, with the welcome's creation time (unix
+  /// seconds), so history replays can be told apart.
+  Stream<({GroupInvite invite, int createdAt})> get invited => _invited.stream;
 
   GroupInfo? group(String groupId) =>
       _groups.where((g) => g.id == groupId).firstOrNull;
@@ -162,6 +168,7 @@ class Groups extends ChangeNotifier {
       return false;
     }
     if (rumor.kind != MarmotKind.welcome) return false;
+    final known = {for (final invite in _invites) invite.id};
     try {
       await _serial(() async {
         await _engine.receiveWelcome(wrapped.id, _rumorJson(rumor));
@@ -173,6 +180,11 @@ class Groups extends ChangeNotifier {
       return true;
     }
     _notify();
+    for (final invite in _invites) {
+      if (!known.contains(invite.id) && !_closed) {
+        _invited.add((invite: invite, createdAt: rumor.createdAt));
+      }
+    }
     return true;
   }
 
@@ -298,6 +310,7 @@ class Groups extends ChangeNotifier {
     _keyPackageRetry?.cancel();
     await _signals.close();
     await _incoming.close();
+    await _invited.close();
     await _events?.cancel();
     final id = _subscriptionId;
     if (id != null) await _ndk.requests.closeSubscription(id);
@@ -471,10 +484,7 @@ class Groups extends ChangeNotifier {
   }
 
   Future<void> _publish(Nip01Event event, Iterable<String> to) async {
-    final taken = await acceptedByAny(
-      _ndk.broadcast.broadcast(nostrEvent: event, specificRelays: to),
-    );
-    if (!taken) {
+    if (!await publishOnce(_ndk, event, to)) {
       throw StateError('No relay accepted event ${event.id}');
     }
   }

@@ -7,6 +7,19 @@
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  // A second launch brings the running app back from the tray instead.
+  ::CreateMutexW(nullptr, TRUE, L"Local\\MorandubaApp");
+  if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+    HWND running =
+        ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"moranduba");
+    if (running != nullptr) {
+      ::AllowSetForegroundWindow(ASFW_ANY);
+      ::PostMessageW(running, ::RegisterWindowMessageW(kShowMessageName), 0,
+                     0);
+    }
+    return EXIT_SUCCESS;
+  }
+
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/calls/calls.dart';
 import '../core/expiry.dart';
 import '../core/session.dart';
+import '../core/sounds.dart';
 import 'app_controller.dart';
 import 'call_page.dart';
 import 'manga.dart';
@@ -33,7 +34,10 @@ class IncomingCallLayer extends StatefulWidget {
 }
 
 class _IncomingCallLayerState extends State<IncomingCallLayer> {
-  final _tone = RingTone.incoming();
+  late final _tone = RingTone(
+    Sound.ring,
+    () => _session?.audio.current.toneFor(Sound.ring) ?? Sound.ring.byDefault,
+  );
 
   /// The tone stops before the card does.
   Timer? _toneLimit;

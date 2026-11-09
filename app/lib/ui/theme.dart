@@ -9,6 +9,7 @@ abstract final class MangaColors {
   static const tone = Color(0xFFCCCCCC);
   // The spec only says "semantic red"; kept under its 80% saturation cap.
   static const error = Color(0xFFB3261E);
+  static const online = Color(0xFF2E9E4F);
 }
 
 abstract final class MangaFonts {

@@ -256,6 +256,29 @@ void main() {
     expect(bobGroups.messagesIn(group.id), isEmpty);
   }, timeout: const Timeout(Duration(seconds: 90)));
 
+  test('a friend request and a group invite each bring one notice', () async {
+    final ids = [Identity.generate(), Identity.generate()];
+    final [alice, bob] = [
+      for (final id in ids) await _start(id, MemorySnapshotStore()),
+    ];
+    addTearDown(alice.close);
+    addTearDown(bob.close);
+    final notices = <Notice>[];
+    final listening = bob.notices.listen(notices.add);
+    addTearDown(listening.cancel);
+
+    await alice.requestFriend(ids[1].publicKey);
+    await _until(bob, () => bob.incomingRequests.isNotEmpty);
+    await alice.groups!.create('invited', [ids[1].publicKey]);
+    await _until(bob.groups!, () => bob.groups!.invites.isNotEmpty);
+    await Future<void>.delayed(const Duration(seconds: 1));
+
+    expect(notices.map((n) => (n.kind, n.body)), [
+      (NoticeKind.invite, 'Wants to be your friend'),
+      (NoticeKind.invite, 'Invited you to invited'),
+    ]);
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
   test('call events reach members; the log switch is shared', () async {
     final ids = [Identity.generate(), Identity.generate()];
     final [alice, bob] = [

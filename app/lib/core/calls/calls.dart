@@ -16,7 +16,7 @@ import 'transport.dart';
 
 /// Signals older than this are history replay, not a live call.
 const _signalMaxAge = Duration(seconds: 60);
-const _presenceTimeout = Duration(seconds: 45);
+const _presenceTimeout = Duration(seconds: 75);
 
 /// A join older than this no longer rings.
 const _ringWindow = Duration(seconds: 30);

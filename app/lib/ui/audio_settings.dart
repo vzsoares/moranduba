@@ -7,9 +7,11 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../core/calls/audio_prefs.dart';
 import '../core/calls/volume.dart';
 import '../core/session.dart';
+import '../core/sounds.dart';
+import 'tone_player.dart';
 
-/// Microphone, speaker and voice processing; changes apply to a call in
-/// progress right away.
+/// Microphone, speaker, voice processing and app sounds; changes apply to a
+/// call in progress right away.
 Future<void> showAudioSettings(BuildContext context, Session session) =>
     showDialog<void>(
       context: context,
@@ -92,6 +94,31 @@ class _AudioSettingsState extends State<_AudioSettings> {
         ],
       );
 
+  /// Picking a tone plays it, so the choice is heard.
+  Widget _sound(Sound sound) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(sound.label, style: Theme.of(context).textTheme.bodyMedium),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<Tone>(
+          initialValue: _prefs.toneFor(sound),
+          isExpanded: true,
+          items: [
+            for (final tone in Tone.values)
+              DropdownMenuItem(value: tone, child: Text(tone.label)),
+          ],
+          onChanged: (tone) {
+            if (tone == null) return;
+            _set(_prefs.copyWith(sounds: {..._prefs.sounds, sound: tone}));
+            if (tone != Tone.off) unawaited(playTone(tone));
+          },
+        ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: const Text('AUDIO'),
@@ -165,6 +192,10 @@ class _AudioSettingsState extends State<_AudioSettings> {
                   value: _prefs.autoGain,
                   onChanged: (on) => _set(_prefs.copyWith(autoGain: on)),
                 ),
+                const SizedBox(height: 12),
+                Text('Sounds', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 6),
+                for (final sound in Sound.values) _sound(sound),
               ],
             ),
           );
