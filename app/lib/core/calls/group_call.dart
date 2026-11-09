@@ -295,8 +295,10 @@ class GroupCall extends ChangeNotifier implements CallHost {
         _applyVideoCap();
         await _transport.participantSeen(from);
         await _transport.participantMedia(from, signal.media);
+        // Presence without a report (outside mesh) clears it, so a later
+        // switch to mesh does not plan relays from links long gone.
+        participant.report = signal.report;
         if (signal.report case final report?) {
-          participant.report = report;
           await _transport.participantLinks(from, report);
         }
         _fallBackIfSplit(signal.mode, signal.sfu);

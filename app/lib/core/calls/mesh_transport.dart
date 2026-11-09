@@ -275,6 +275,7 @@ class MeshTransport implements CallTransport {
     _failures[participant] = failures;
     await _close(participant);
     final changed = _failed.add(participant);
+    _show(participant);
     _publishState(participant);
     if (changed) _linksChanged();
     if (_closed || !_dials(participant)) return;
@@ -304,7 +305,10 @@ class MeshTransport implements CallTransport {
   }
 
   void _publishState(String participant, [String? direct]) {
-    final state = _connected.contains(participant)
+    final disconnected =
+        direct ==
+        RTCPeerConnectionState.RTCPeerConnectionStateDisconnected.name;
+    final state = _connected.contains(participant) && !disconnected
         ? 'connected'
         : _incoming[participant]?.connected ?? false
         ? 'relayed'
@@ -338,7 +342,10 @@ class MeshTransport implements CallTransport {
   Future<void> _serve(RelayJob job) async {
     final source = _links[job.origin];
     final stream = _direct[job.origin];
-    if (source == null || stream == null) return;
+    if (source == null || stream == null) {
+      _replanSoon();
+      return;
+    }
     _serving[job] = null;
     RTCPeerConnection? pc;
     try {
@@ -349,10 +356,24 @@ class MeshTransport implements CallTransport {
       }
       _serving[job] = pc;
       final relay = pc;
-      relay.onConnectionState = (state) {
+      var connected = false;
+      void retry() {
         if (_serving[job] != relay) return;
-        if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-          unawaited(_stopServing(job).then((_) => _replanSoon()));
+        unawaited(_stopServing(job).then((_) => _replanSoon()));
+      }
+
+      // A lost relay_offer or relay_answer leaves the link in `new` for good.
+      Timer(connectTimeout, () {
+        if (!connected) retry();
+      });
+      relay.onConnectionState = (state) {
+        switch (state) {
+          case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+            connected = true;
+          case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
+            retry();
+          default:
+            break;
         }
       };
       for (final transceiver in await source.getTransceivers()) {
@@ -378,7 +399,10 @@ class MeshTransport implements CallTransport {
       }
     } catch (e) {
       debugPrint('relay ${job.origin} to ${job.target}: $e');
-      if (_serving[job] == pc) await _stopServing(job);
+      if (_serving[job] == pc) {
+        await _stopServing(job);
+        _replanSoon();
+      }
     }
   }
 
@@ -406,6 +430,10 @@ class MeshTransport implements CallTransport {
   Future<void> _acceptRelay(String via, String origin, String sdp) async {
     await _closeIncoming(origin);
     final pc = await createPeerConnection(_config);
+    if (_closed) {
+      await _closeQuietly(pc, 'relay from $via');
+      return;
+    }
     final incoming = _Incoming(via, pc);
     _incoming[origin] = incoming;
     pc.onTrack = (event) {
