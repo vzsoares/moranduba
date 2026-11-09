@@ -3,6 +3,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'blank_track.dart';
 import 'call_crypto.dart';
 import 'call_signal.dart';
+import 'relay_plan.dart';
 
 /// What a transport needs from the call it carries.
 abstract interface class CallHost {
@@ -18,6 +19,9 @@ abstract interface class CallHost {
   void remoteStream(String participant, MediaStream stream);
   void peerState(String participant, String state);
   void peerGone(String participant);
+
+  /// The transport's [CallTransport.linkReport] changed.
+  void linksChanged();
 }
 
 /// Moves media between participants. Switching mode swaps transports and
@@ -42,6 +46,12 @@ abstract interface class CallTransport {
 
   Future<void> participantLeft(String participant);
 
+  /// Our direct links, for presence; null outside mesh.
+  LinkReport? get linkReport;
+
+  /// [participant]'s direct links, from its presence.
+  Future<void> participantLinks(String participant, LinkReport report);
+
   /// Swaps the outgoing video track (camera, screen or none) on every link.
   Future<void> replaceVideo(MediaStreamTrack? track);
 
@@ -63,6 +73,7 @@ class LinkStats {
     this.packetsLost = 0,
     this.roundTrip,
     this.jitter,
+    this.via,
   });
 
   final String state;
@@ -79,6 +90,9 @@ class LinkStats {
   /// Worst inbound audio jitter.
   final Duration? jitter;
 
+  /// The member relaying this participant's media, when not direct.
+  final String? via;
+
   Map<String, Object> toJson() => {
     'state': state,
     'framesDecoded': framesDecoded,
@@ -87,6 +101,7 @@ class LinkStats {
     'packetsLost': packetsLost,
     'roundTripMs': ?roundTrip?.inMilliseconds,
     'jitterMs': ?jitter?.inMilliseconds,
+    'via': ?via,
   };
 }
 
@@ -113,15 +128,17 @@ class LinkTally {
     }
   }
 
-  LinkStats stats(String state, {Duration? roundTrip}) => LinkStats(
-    state: state,
-    framesDecoded: _frames,
-    audioPackets: _audioPackets,
-    packetsReceived: _received,
-    packetsLost: _lost,
-    roundTrip: roundTrip,
-    jitter: _seconds(_jitter),
-  );
+  LinkStats stats(String state, {Duration? roundTrip, String? via}) =>
+      LinkStats(
+        state: state,
+        framesDecoded: _frames,
+        audioPackets: _audioPackets,
+        packetsReceived: _received,
+        packetsLost: _lost,
+        roundTrip: roundTrip,
+        jitter: _seconds(_jitter),
+        via: via,
+      );
 }
 
 int _int(Object? value) => switch (value) {
@@ -235,11 +252,15 @@ Future<RTCSessionDescription?> gatheredDescription(RTCPeerConnection pc) async {
   return pc.getLocalDescription();
 }
 
-Future<LinkStats> linkStats(RTCPeerConnection pc) async {
+Future<LinkStats> linkStats(RTCPeerConnection pc, {String? via}) async {
   final reports = await pc.getStats();
   final tally = LinkTally();
   for (final report in reports) {
     if (report.type == 'inbound-rtp') tally.inbound(report.values);
   }
-  return tally.stats(connectionStateOf(pc), roundTrip: roundTripOf(reports));
+  return tally.stats(
+    connectionStateOf(pc),
+    roundTrip: roundTripOf(reports),
+    via: via,
+  );
 }

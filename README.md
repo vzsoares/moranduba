@@ -64,6 +64,7 @@ flutter test --run-skipped -t relay   # end to end, needs the dev relay
 (cd rust && cargo test)               # engine
 ./tool/test_web_mls.sh                # engine as wasm, under Node
 ./e2e/run.sh                          # encrypted call, two headless Chromes
+ROLES=alice,bob,carol ./e2e/run.sh e2e/relay_e2e.dart   # failed pair relayed
 (cd ../sfu && go test ./...)          # SFU
 ```
 

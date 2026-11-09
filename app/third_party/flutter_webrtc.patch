@@ -74,3 +74,51 @@
    } else if (method_call.method_name().compare("getLocalDescription") == 0) {
      if (!method_call.arguments()) {
        result->Error("Bad Arguments", "Null constraints arguments received");
+--- a/android/src/main/java/com/cloudwebrtc/webrtc/MethodCallHandlerImpl.java
++++ b/android/src/main/java/com/cloudwebrtc/webrtc/MethodCallHandlerImpl.java
+@@ -2404,10 +2404,8 @@
+ 
+   public void addTrack(String peerConnectionId, String trackId, List<String> streamIds, Result result) {
+     PeerConnectionObserver pco = mPeerConnectionObservers.get(peerConnectionId);
+-    LocalTrack track;
+-    synchronized (localTracks) {
+-      track = localTracks.get(trackId);
+-    }
++    // Moranduba patch: remote tracks too, so a call member can relay them.
++    MediaStreamTrack track = getTrackForId(trackId, null);
+     if (track == null) {
+       resultError("addTrack", "track is null", result);
+       return;
+@@ -2415,7 +2413,7 @@
+     if (pco == null || pco.getPeerConnection() == null) {
+       resultError("addTrack", "peerConnection is null", result);
+     } else {
+-      pco.addTrack(track.track, streamIds, result);
++      pco.addTrack(track, streamIds, result);
+     }
+   }
+ 
+@@ -2543,20 +2541,14 @@
+       resultError("rtpSenderSetTrack", "peerConnection is null", result);
+     } else {
+       MediaStreamTrack mediaStreamTrack = null;
+-      LocalTrack track;
+-      synchronized (localTracks) {
+-        track = localTracks.get(trackId);
+-      }
++      // Moranduba patch: remote tracks too, so a call member can relay them.
+       if (trackId.length() > 0) {
+-        if (track == null) {
++        mediaStreamTrack = getTrackForId(trackId, null);
++        if (mediaStreamTrack == null) {
+           resultError("rtpSenderSetTrack", "track is null", result);
+           return;
+         }
+       }
+-
+-      if(track != null) {
+-        mediaStreamTrack = track.track;
+-      }
+       pco.rtpSenderSetTrack(rtpSenderId, mediaStreamTrack, result, replace);
+     }
+   }

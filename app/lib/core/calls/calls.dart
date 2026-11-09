@@ -107,6 +107,21 @@ class Calls extends ChangeNotifier {
   /// Microphone and speaker for new calls.
   AudioPrefs Function()? audioPrefs;
 
+  /// TURN servers set on this device, added to every link of new calls.
+  List<Map<String, String>> Function()? turnServers;
+
+  /// Tests: mesh links to these participants fail, so a relay has to
+  /// carry them.
+  bool Function(String participant)? directBlocked;
+
+  List<Map<String, String>> get _turn => turnServers?.call() ?? const [];
+
+  CallTransport _mesh(CallHost host) => MeshTransport(
+    host,
+    iceServers: [..._turn, ...defaultIceServers],
+    directBlocked: directBlocked,
+  );
+
   /// Pings an SFU; tests swap it to make one unreachable.
   late Future<Map<String, Object?>> Function(String sfu) ping = (sfu) =>
       switch (sfuClient) {
@@ -215,6 +230,7 @@ class Calls extends ChangeNotifier {
           ? (mode, sfu) => transportFor(groupId, mode, sfu)
           : null,
       audio: audioPrefs?.call() ?? const AudioPrefs(),
+      mesh: _mesh,
     );
     active = call;
     _startedActive = running == null;
@@ -250,13 +266,13 @@ class Calls extends ChangeNotifier {
           if (host != server) ('host_peer', host),
       ];
     }
-    if (candidates.isEmpty) return MeshTransport.new;
+    if (candidates.isEmpty) return _mesh;
     try {
       return await _through(candidates);
     } catch (e) {
       serverProblem = '$e';
       debugPrint('call server: $e');
-      return MeshTransport.new;
+      return _mesh;
     }
   }
 
@@ -268,7 +284,7 @@ class Calls extends ChangeNotifier {
     String mode, [
     String? sfu,
   ]) async {
-    if (mode == 'mesh') return MeshTransport.new;
+    if (mode == 'mesh') return _mesh;
     final candidates = switch ((mode, sfu)) {
       (_, final String sfu) => [(mode, sfu)],
       ('server', null) => [
@@ -302,7 +318,7 @@ class Calls extends ChangeNotifier {
       onProblem: (_, e) => problem ??= e,
     );
     if (picked == null) throw problem ?? const SfuException('No SFU answered');
-    final iceServers = iceServersFrom(picked.pong);
+    final iceServers = [...iceServersFrom(picked.pong), ..._turn];
     return (CallHost host) => SfuTransport(
       host,
       client: client,

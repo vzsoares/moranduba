@@ -9,6 +9,7 @@ import 'call_crypto.dart';
 import 'call_quality.dart';
 import 'call_signal.dart';
 import 'mesh_transport.dart';
+import 'relay_plan.dart';
 import 'screen_capture.dart';
 import 'transport.dart';
 import 'volume.dart';
@@ -26,6 +27,9 @@ class CallParticipant {
   final String pubkey;
   MediaState media = const MediaState();
   String state = 'new';
+
+  /// Their direct links in mesh, from presence.
+  LinkReport? report;
   DateTime lastSeen = DateTime.now();
   MediaStream? stream;
   RTCVideoRenderer? renderer;
@@ -59,6 +63,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     )?
     resolve,
     AudioPrefs audio = const AudioPrefs(),
+    CallTransport Function(CallHost host) mesh = MeshTransport.new,
   }) async {
     final call = GroupCall._(
       groups,
@@ -71,14 +76,14 @@ class GroupCall extends ChangeNotifier implements CallHost {
     await call._openMedia();
     await callServiceUpdate(sharing: false);
     await call._rekey();
-    call._transport = (transport ?? MeshTransport.new)(call);
+    call._transport = (transport ?? mesh)(call);
     try {
       await call._transport.start();
     } catch (e) {
       if (call._transport.mode == 'mesh') rethrow;
       debugPrint('${call._transport.mode} failed, using mesh: $e');
       await call._transport.close();
-      call._transport = MeshTransport(call);
+      call._transport = mesh(call);
       await call._transport.start();
     }
     groups.addListener(call._onGroupChanged);
@@ -113,6 +118,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
   /// Why the last switch failed, for the UI.
   String? switchProblem;
   Timer? _ticker;
+  Timer? _linksTimer;
   int _keyEpoch = -1;
   bool _closed = false;
 
@@ -289,10 +295,17 @@ class GroupCall extends ChangeNotifier implements CallHost {
         _applyVideoCap();
         await _transport.participantSeen(from);
         await _transport.participantMedia(from, signal.media);
+        if (signal.report case final report?) {
+          participant.report = report;
+          await _transport.participantLinks(from, report);
+        }
         _fallBackIfSplit(signal.mode, signal.sfu);
       case SignalType.leave:
         await _transport.participantLeft(from);
-      case SignalType.offer || SignalType.answer:
+      case SignalType.offer ||
+          SignalType.answer ||
+          SignalType.relayOffer ||
+          SignalType.relayAnswer:
         participants.putIfAbsent(from, () => CallParticipant(from)).lastSeen =
             DateTime.now();
         if (_transport.mode != 'mesh' && signal.to == me) {
@@ -383,6 +396,9 @@ class GroupCall extends ChangeNotifier implements CallHost {
       for (final p in [...participants.values]) {
         await next.participantSeen(p.pubkey);
         await next.participantMedia(p.pubkey, p.media);
+        if (p.report case final report?) {
+          await next.participantLinks(p.pubkey, report);
+        }
       }
       final early = [..._earlyOffers];
       _earlyOffers.clear();
@@ -413,8 +429,20 @@ class GroupCall extends ChangeNotifier implements CallHost {
       media: localMedia,
       mode: _transport.mode,
       sfu: _transport.sfu,
+      report: type == SignalType.leave ? null : _transport.linkReport,
     ),
   );
+
+  /// Others pick relays from our link report, so a change goes out at once
+  /// instead of with the next heartbeat; bursts collapse into one.
+  @override
+  void linksChanged() {
+    if (_closed) return;
+    _linksTimer ??= Timer(const Duration(seconds: 1), () {
+      _linksTimer = null;
+      if (!_closed) unawaited(_announce(SignalType.here));
+    });
+  }
 
   @override
   void remoteStream(String participant, MediaStream stream) {
@@ -646,6 +674,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     _closed = true;
     notifyListeners();
     _ticker?.cancel();
+    _linksTimer?.cancel();
     _groups.removeListener(_onGroupChanged);
     await _transport.close();
     await callServiceStop();

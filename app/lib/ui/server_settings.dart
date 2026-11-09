@@ -8,8 +8,9 @@ import '../core/session.dart';
 import 'manga.dart';
 import 'theme.dart';
 
-/// Relays and Blossom servers for this identity on this device. Saving
-/// restarts the session through [onReconnect].
+/// Relays, Blossom and TURN servers for this identity on this device.
+/// Saving new relays or Blossom servers restarts the session through
+/// [onReconnect]; TURN servers apply from the next call.
 Future<void> showServerSettings(
   BuildContext context,
   Session session, {
@@ -32,21 +33,56 @@ class _ServerSettings extends StatefulWidget {
 class _ServerSettingsState extends State<_ServerSettings> {
   late final _relays = [...widget.session.relays];
   late final _blossom = [...widget.session.blossomServers];
+  late final _turn = [...widget.session.network.turn];
   final _newRelay = TextEditingController();
   final _newBlossom = TextEditingController();
+  final _newTurn = TextEditingController();
+  final _turnUser = TextEditingController();
+  final _turnPassword = TextEditingController();
   String? _relayError;
   String? _blossomError;
+  String? _turnError;
 
   @override
   void dispose() {
     _newRelay.dispose();
     _newBlossom.dispose();
+    _newTurn.dispose();
+    _turnUser.dispose();
+    _turnPassword.dispose();
     super.dispose();
   }
 
-  bool get _changed =>
+  bool get _reconnects =>
       !listEquals(_relays, widget.session.relays) ||
       !listEquals(_blossom, widget.session.blossomServers);
+
+  bool get _changed =>
+      _reconnects || !listEquals(_turn, widget.session.network.turn);
+
+  void _addTurn() {
+    final url = turnUrl(_newTurn.text);
+    final server = url == null
+        ? null
+        : TurnServer(
+            url: url,
+            username: _turnUser.text.trim(),
+            credential: _turnPassword.text,
+          );
+    setState(() {
+      if (server == null) {
+        _turnError = 'Not a TURN address';
+      } else if (_turn.contains(server)) {
+        _turnError = 'Already in the list';
+      } else {
+        _turn.add(server);
+        _newTurn.clear();
+        _turnUser.clear();
+        _turnPassword.clear();
+        _turnError = null;
+      }
+    });
+  }
 
   void _add(
     TextEditingController field,
@@ -78,16 +114,85 @@ class _ServerSettingsState extends State<_ServerSettings> {
   });
 
   Future<void> _save() async {
+    final reconnect = _reconnects;
     // Lists equal to the defaults are stored as none, so new defaults apply.
     await widget.session.network.save(
       relays: listEquals(_relays, defaultRelays) ? const [] : _relays,
       blossom: listEquals(_blossom, defaultBlossomServers)
           ? const []
           : _blossom,
+      turn: _turn,
     );
     if (!mounted) return;
+    if (!reconnect) {
+      Navigator.of(context).pop();
+      return;
+    }
     Navigator.of(context).popUntil((route) => route.isFirst);
     await widget.onReconnect();
+  }
+
+  Widget _turnSection() {
+    final text = Theme.of(context).textTheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Call relays (TURN)', style: text.titleSmall),
+        const SizedBox(height: 4),
+        Text(
+          'For calls without a call server, when two people cannot connect '
+          'directly and nobody else in the call can pass their media on. '
+          'The TURN server sees your IP address, never the media. Optional.',
+          style: text.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        for (final server in _turn)
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(server.url, style: monoStyle),
+            subtitle: server.username.isEmpty ? null : Text(server.username),
+            trailing: IconButton(
+              tooltip: 'Remove',
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: () => setState(() => _turn.remove(server)),
+            ),
+          ),
+        LabeledField(
+          label: 'Add',
+          hint: 'turn:turn.example.com:3478',
+          controller: _newTurn,
+          monospace: true,
+          error: _turnError,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: LabeledField(label: 'Username', controller: _turnUser),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: LabeledField(
+                label: 'Password',
+                controller: _turnPassword,
+                obscure: true,
+                onSubmitted: (_) => _addTurn(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 22),
+              child: OutlinedButton(
+                onPressed: _addTurn,
+                child: const Text('Add'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   Widget _section({
@@ -185,6 +290,8 @@ class _ServerSettingsState extends State<_ServerSettings> {
                 (e) => _blossomError = e,
               ),
             ),
+            const SizedBox(height: 20),
+            _turnSection(),
           ],
         ),
       ),
@@ -197,7 +304,7 @@ class _ServerSettingsState extends State<_ServerSettings> {
       ),
       FilledButton(
         onPressed: _changed ? _save : null,
-        child: const Text('Save and reconnect'),
+        child: Text(_reconnects ? 'Save and reconnect' : 'Save'),
       ),
     ],
   );

@@ -43,7 +43,8 @@ flowchart LR
 | Nostr relays | Chat, invites, call signaling | Ciphertext, timing, recipient pubkeys of gift wraps |
 | Blossom servers | Chat attachments | Ciphertext blobs and their size |
 | Moranduba SFU (host peer or VPS) | Call media | Encrypted frames, participant IPs, bitrate |
-| TURN (when needed) | Call media for peers that can't connect directly | Encrypted packets, IPs |
+| TURN (embedded in an SFU, or on the user's TURN list) | Call media for peers that can't connect directly | Encrypted packets, IPs |
+| Relay member (mesh) | Media of two members that can't connect directly | What any call member sees: decrypted media, both IPs (it has direct links to both) |
 
 ## Identity and friends
 
@@ -190,13 +191,28 @@ sequenceDiagram
 - Presence heartbeats carry the sender's mode. A member on `mesh` while
   others use `server` (it could not reach the SFU) moves the call to `mesh`,
   which works for everyone.
+- In mesh, presence also carries the sender's direct links (`links`) and
+  the peers it could not reach (`failed`), sent again within a second of a
+  change. Relay links use `relay_offer`/`relay_answer` with an `origin`.
 
 ### NAT traversal
 
 - STUN finds public addresses. Direct connections work for most home networks.
 - A VPS SFU has a public IP and embeds a TURN server (pion/turn), so `server`
   mode always connects.
-- `mesh` and `host_peer` without any server: open question, see below.
+- `host_peer`: a member who cannot reach the host reports `mesh`, and the
+  call falls back to mesh for everyone (see Signaling).
+- `mesh` (ADR [0003](adr/0003-relay-through-members.md)): a direct link
+  that fails, or is not connected after 20 s, is reported in presence and
+  redialed with backoff (up to once a minute). A third participant with
+  direct links to both ends relays their media; every client picks the
+  same relay from the reports. The relay forwards the tracks it already
+  receives and decrypts, encrypted again with the same call key, so frames
+  never travel in the clear. Ends show the direct stream again once it
+  connects (make before break).
+- Each device can list TURN servers (Profile > Relays and file servers),
+  added to every link: mesh, relay and SFU. This covers two-person calls
+  and pairs nobody can relay. No TURN service is built in.
 
 ## Moranduba SFU
 
@@ -259,24 +275,22 @@ moranduba/
 
 Added along the way: profiles (name and picture, encrypted), disappearing
 messages (per-chat timer, NIP-40), attachments in DMs (NIP-17 kind 15),
-media viewer, landing page.
+media viewer, landing page, mesh relay through members plus a per-device
+TURN list (ADR 0003; web tested, devices not yet).
 
 ## Open questions
 
-1. **TURN without a server.** In `mesh` and `host_peer` with no VPS, roughly
-   10–20% of peer pairs can't connect directly. Options: a public TURN service,
-   routing through another member, or a community list of TURN servers.
-2. **Incoming-call push on iOS apps.** Each SFU rings members' devices
+1. **Incoming-call push on iOS apps.** Each SFU rings members' devices
    through Web Push (browsers, iOS home-screen web apps) and UnifiedPush
-   (Android, with a distributor such as ntfy); see "Call push" below.
+   (Android, with a distributor such as ntfy); see "Call push" above.
    Native iOS and Firebase push need the publisher's Apple and Google
    credentials, so a self-hosted SFU cannot send them.
-3. **MDK exporter API.** Confirm MDK exposes `MLS-Exporter` with a custom label
+2. **MDK exporter API.** Confirm MDK exposes `MLS-Exporter` with a custom label
    for the call key. If not, derive the call key via HKDF from the MIP-04
    exporter secret with a distinct info string.
-4. **Metadata on public relays.** Gift-wrap recipients and MLS group IDs are
+3. **Metadata on public relays.** Gift-wrap recipients and MLS group IDs are
    visible to relays. Document what leaks for users, and suggest an own relay.
-5. **SFU quality vs LiveKit.** Plan tuning time for congestion control and
+4. **SFU quality vs LiveKit.** Plan tuning time for congestion control and
    simulcast switching before calling `server` mode done.
 
 ## Prior art

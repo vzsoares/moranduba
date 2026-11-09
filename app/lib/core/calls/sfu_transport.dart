@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'call_signal.dart';
 import 'receiver_e2ee.dart';
+import 'relay_plan.dart';
 import 'sfu_client.dart';
 import 'transport.dart';
 
@@ -210,6 +211,12 @@ class SfuTransport implements CallTransport {
     'type': 'pin',
     'pubkeys': [..._pinned],
   });
+
+  @override
+  LinkReport? get linkReport => null;
+
+  @override
+  Future<void> participantLinks(String participant, LinkReport report) async {}
 
   @override
   Future<void> participantLeft(String participant) async {

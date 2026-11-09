@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'relay_plan.dart';
+
 /// Call signaling carried as MLS application messages inside the group.
 /// Shape is ours and *provisional*.
 enum SignalType {
@@ -8,6 +10,11 @@ enum SignalType {
   leave,
   offer,
   answer,
+
+  /// A relay member's offer carrying [CallSignal.origin]'s media, and the
+  /// answer to it (ADR 0003).
+  relayOffer('relay_offer'),
+  relayAnswer('relay_answer'),
   switchMode('switch'),
 
   /// Rings [CallSignal.to], or every member not in the call, into it.
@@ -58,6 +65,8 @@ class CallSignal {
     this.mode,
     this.sfu,
     this.seq = 0,
+    this.origin,
+    this.report,
   });
 
   final SignalType type;
@@ -75,6 +84,12 @@ class CallSignal {
   final String? sfu;
   final int seq;
 
+  /// Whose media a relay link carries.
+  final String? origin;
+
+  /// The sender's direct links, in mesh presence.
+  final LinkReport? report;
+
   String encode() => jsonEncode({
     't': type.wire,
     'call': callId,
@@ -84,6 +99,11 @@ class CallSignal {
     'mode': ?mode,
     'sfu': ?sfu,
     if (seq != 0) 'seq': seq,
+    'origin': ?origin,
+    if (report case final report?) ...{
+      'links': [...report.links],
+      'failed': [...report.failed],
+    },
   });
 
   static CallSignal? decode(String payload) {
@@ -119,6 +139,17 @@ class CallSignal {
         seq: switch (json['seq']) {
           final int seq => seq,
           _ => 0,
+        },
+        origin: switch (json['origin']) {
+          final String origin => origin,
+          _ => null,
+        },
+        report: switch ((json['links'], json['failed'])) {
+          (final List<Object?> links, final List<Object?> failed) => LinkReport(
+            links: links.whereType<String>().toSet(),
+            failed: failed.whereType<String>().toSet(),
+          ),
+          _ => null,
         },
       );
     }

@@ -17,6 +17,39 @@ void main() {
     expect(blossomUrl('wss://files.example.com'), isNull);
   });
 
+  test('TURN addresses get turn: and keep their parameters', () {
+    expect(turnUrl('turn.example.com:3478'), 'turn:turn.example.com:3478');
+    expect(
+      turnUrl(' turns:turn.example.com:5349?transport=tcp '),
+      'turns:turn.example.com:5349?transport=tcp',
+    );
+    expect(turnUrl('turn:user:pass@turn.example.com'), isNull);
+    expect(turnUrl('turn:'), isNull);
+    expect(turnUrl(''), isNull);
+  });
+
+  test('TURN servers are kept apart from the relay lists', () async {
+    final store = MemorySnapshotStore();
+    final book = NetworkBook(store);
+    const server = TurnServer(
+      url: 'turn:turn.example.com:3478',
+      username: 'u',
+      credential: 'p',
+    );
+    await book.save(relays: const [], blossom: const [], turn: [server]);
+    await book.save(relays: ['wss://a.example'], blossom: const []);
+
+    final again = NetworkBook(store);
+    await again.load();
+    expect(again.turn, [server]);
+    expect(again.turn.single.ice, {
+      'urls': 'turn:turn.example.com:3478',
+      'username': 'u',
+      'credential': 'p',
+    });
+    expect(again.relays, ['wss://a.example']);
+  });
+
   test('saved lists come back; empty ones mean the defaults', () async {
     final store = MemorySnapshotStore();
     final book = NetworkBook(store);

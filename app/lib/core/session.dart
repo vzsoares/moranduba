@@ -298,7 +298,8 @@ class Session extends ChangeNotifier {
         }
         ..serverFor = serverOf
         ..hostsFor = servers.hostsOf
-        ..audioPrefs = (() => audio.current);
+        ..audioPrefs = (() => audio.current)
+        ..turnServers = (() => [for (final s in network.turn) s.ice]);
       started.incoming.listen(_onGroupMessage);
       started.addListener(_shareProfileSoon);
       started.addListener(_announceExpiriesSoon);

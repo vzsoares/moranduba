@@ -578,6 +578,14 @@ class _CallInfoSheet extends StatelessWidget {
                     else
                       for (final p in call.participants.values)
                         Text('${session.displayName(p.pubkey)}: ${p.state}'),
+                    if (call.participants.values.any(
+                      (p) => p.state == 'failed',
+                    ))
+                      const Text(
+                        'Nobody in the call can pass on media for a failed '
+                        'link. A TURN server (Profile > Relays and file '
+                        'servers) or a call server fixes it.',
+                      ),
                     const SizedBox(height: 16),
                     Wrap(
                       spacing: 8,
@@ -714,6 +722,8 @@ class _Tiles extends StatelessWidget {
             ),
             note: switch (p.state) {
               'connected' => p.media.screen ? 'Sharing screen' : null,
+              'relayed' =>
+                p.media.screen ? 'Sharing screen, relayed' : 'Relayed',
               final state => state == 'new' ? 'Connecting…' : state,
             },
             highlighted: highlight.value == p.pubkey,
