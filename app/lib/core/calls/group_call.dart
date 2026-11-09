@@ -16,8 +16,9 @@ import 'volume.dart';
 /// Above this many other participants, mesh stops sending camera video.
 const meshVideoCap = 4;
 
-const _heartbeat = Duration(seconds: 15);
-const _presenceTimeout = Duration(seconds: 45);
+/// Each heartbeat is a relay post; relays rate-limit posts per IP.
+const _heartbeat = Duration(seconds: 30);
+const _presenceTimeout = Duration(seconds: 75);
 
 class CallParticipant {
   CallParticipant(this.pubkey);

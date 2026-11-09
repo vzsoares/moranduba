@@ -104,10 +104,7 @@ class SfuClient {
         content: content,
       ),
     );
-    final taken = await acceptedByAny(
-      _ndk.broadcast.broadcast(nostrEvent: wrap, specificRelays: relays),
-    );
-    if (!taken) {
+    if (!await publishOnce(_ndk, wrap, relays)) {
       throw const SfuException('No relay took the request');
     }
   }

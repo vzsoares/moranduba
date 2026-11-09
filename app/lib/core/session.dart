@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -213,6 +214,10 @@ class Session extends ChangeNotifier {
   bool _push = false;
   final Set<String> _pushReady = {};
   final Set<String> _pushTrying = {};
+
+  /// SFUs that failed or refused us, with when and how long to wait; each
+  /// ping is a relay post, and group activity asks again.
+  final Map<String, ({DateTime at, Duration wait})> _pushBackoff = {};
   Timer? _pushTimer;
   Timer? _profileTimer;
   Timer? _pruneTimer;
@@ -790,23 +795,40 @@ class Session extends ChangeNotifier {
   Future<void> _syncPush() async {
     final g = groups;
     if (g == null || _closed) return;
+    final now = DateTime.now();
     final sfus = {for (final space in g.spaces) ..._sfusOf(space.id)}
       ..removeAll(_pushReady)
-      ..removeAll(_pushTrying);
+      ..removeAll(_pushTrying)
+      ..removeWhere((sfu) {
+        final backoff = _pushBackoff[sfu];
+        return backoff != null && now.isBefore(backoff.at.add(backoff.wait));
+      });
     _pushTrying.addAll(sfus);
     await Future.wait([
       for (final sfu in sfus)
         _subscribePush(sfu)
-            .catchError((Object e) => debugPrint('push via $sfu: $e'))
+            .catchError((Object e) {
+              debugPrint('push via $sfu: $e');
+              _backOffPush(sfu);
+            })
             .whenComplete(() => _pushTrying.remove(sfu)),
     ]);
+  }
+
+  void _backOffPush(String sfu) {
+    final last = _pushBackoff[sfu]?.wait;
+    final wait = last == null
+        ? const Duration(seconds: 10)
+        : Duration(seconds: min(last.inSeconds * 2, 600));
+    _pushBackoff[sfu] = (at: DateTime.now(), wait: wait);
+    _syncPushSoon(after: wait);
   }
 
   Future<void> _subscribePush(String sfu) async {
     final pong = await pingServer(sfu);
     // The owner's allowlist update may still be on its way.
     if (pong['allowed'] != true) {
-      _syncPushSoon(after: const Duration(seconds: 10));
+      _backOffPush(sfu);
       return;
     }
     final key = pong['push_key'];
@@ -815,6 +837,7 @@ class Session extends ChangeNotifier {
     if (target == null) return;
     await sfuClient.request(sfu, target.toRequest());
     _pushReady.add(sfu);
+    _pushBackoff.remove(sfu);
   }
 
   /// Asks the group's SFUs to ring the other members' devices when we start
@@ -1424,18 +1447,8 @@ class Session extends ChangeNotifier {
       discoveryRelays: relays,
     );
     final [delivered, _] = await Future.wait([
-      acceptedByAny(
-        _ndk.broadcast.broadcast(
-          nostrEvent: await wrapFor(pubkey),
-          specificRelays: theirRelays ?? relays,
-        ),
-      ),
-      acceptedByAny(
-        _ndk.broadcast.broadcast(
-          nostrEvent: await wrapFor(identity.publicKey),
-          specificRelays: relays,
-        ),
-      ),
+      publishOnce(_ndk, await wrapFor(pubkey), theirRelays ?? relays),
+      publishOnce(_ndk, await wrapFor(identity.publicKey), relays),
     ]);
     if (!delivered) {
       throw StateError('No relay accepted the message');

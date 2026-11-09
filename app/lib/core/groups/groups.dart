@@ -471,10 +471,7 @@ class Groups extends ChangeNotifier {
   }
 
   Future<void> _publish(Nip01Event event, Iterable<String> to) async {
-    final taken = await acceptedByAny(
-      _ndk.broadcast.broadcast(nostrEvent: event, specificRelays: to),
-    );
-    if (!taken) {
+    if (!await publishOnce(_ndk, event, to)) {
       throw StateError('No relay accepted event ${event.id}');
     }
   }
