@@ -186,6 +186,26 @@ Future<(RTCRtpTransceiver, bool)> addEncryptedVideo(
   return (transceiver, sending != null);
 }
 
+/// [addEncryptedVideo] for the answering side: addTrack takes over the remote
+/// offer's video slot. Chrome ignores a transform set after replaceTrack on
+/// such a slot, so the blank comes in through addTrack. Null on native, where
+/// the slot waits for [CallCrypto.encrypt].
+Future<RTCRtpSender?> encryptOfferedVideo(
+  RTCPeerConnection pc,
+  CallHost host,
+) async {
+  final blank = await blankVideoTrack();
+  if (blank == null) return null;
+  final stream = host.outgoingStream;
+  final sender = stream == null
+      ? await pc.addTrack(blank)
+      : await pc.addTrack(blank, stream);
+  await host.crypto.encrypt(sender, host.me);
+  await sender.replaceTrack(null);
+  await blank.stop();
+  return sender;
+}
+
 /// Replaces [sender]'s track and waits until it shows. On web the
 /// plugin drops the browser's promise, and a frame cryptor attached before
 /// the track lands throws.

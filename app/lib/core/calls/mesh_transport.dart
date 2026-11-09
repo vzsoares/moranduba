@@ -50,8 +50,7 @@ class MeshTransport implements CallTransport {
     switch (signal.type) {
       case SignalType.offer:
         await _close(from);
-        final pc = await _link(from);
-        await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
+        final pc = await _link(from, offer: sdp);
         await pc.setLocalDescription(await pc.createAnswer());
         final answer = await gatheredDescription(pc);
         if (answer?.sdp case final sdp?) {
@@ -94,14 +93,20 @@ class MeshTransport implements CallTransport {
     }
   }
 
-  Future<RTCPeerConnection> _link(String participant) async {
+  /// Opens the link to [participant]; with [offer], as the answering side.
+  Future<RTCPeerConnection> _link(String participant, {String? offer}) async {
     final pc = await createPeerConnection({
       'iceServers': iceServers,
       'sdpSemantics': 'unified-plan',
     });
     _links[participant] = pc;
+    _watch(pc, participant);
+    if (offer != null) {
+      await pc.setRemoteDescription(RTCSessionDescription(offer, 'offer'));
+    }
     final stream = _host.outgoingStream;
     for (final track in _host.outgoingTracks) {
+      // When answering, this takes over the offer's slot of the same kind.
       final sender = stream == null
           ? await pc.addTrack(track)
           : await pc.addTrack(track, stream);
@@ -109,17 +114,47 @@ class MeshTransport implements CallTransport {
       await _host.crypto.encrypt(sender, _host.me);
     }
     if (!_host.outgoingTracks.any((t) => t.kind == 'video')) {
-      // Keeps a video slot so a later camera or screen needs no renegotiation.
-      final (video, encrypted) = await addEncryptedVideo(
-        pc,
-        _host,
-        init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv),
-      );
-      if (encrypted) _encrypted.add(video.sender.senderId);
+      await _videoSlot(pc, answering: offer != null);
     }
     for (final transceiver in await pc.getTransceivers()) {
       await _host.crypto.decrypt(transceiver.receiver, participant);
     }
+    return pc;
+  }
+
+  /// Keeps a video slot so a later camera or screen needs no renegotiation.
+  /// The answering side must reuse the offer's slot: one it adds itself stays
+  /// out of the answer. The stream ties the video to the peer's audio.
+  Future<void> _videoSlot(
+    RTCPeerConnection pc, {
+    required bool answering,
+  }) async {
+    final stream = _host.outgoingStream;
+    if (!answering) {
+      final (video, encrypted) = await addEncryptedVideo(
+        pc,
+        _host,
+        init: RTCRtpTransceiverInit(
+          direction: TransceiverDirection.SendRecv,
+          streams: [?stream],
+        ),
+      );
+      if (encrypted) _encrypted.add(video.sender.senderId);
+      return;
+    }
+    if (await encryptOfferedVideo(pc, _host) case final sender?) {
+      _encrypted.add(sender.senderId);
+      return;
+    }
+    for (final transceiver in await pc.getTransceivers()) {
+      if (transceiver.receiver.track?.kind != 'video') continue;
+      await transceiver.setDirection(TransceiverDirection.SendRecv);
+      if (stream != null) await transceiver.sender.setStreams([stream]);
+      return;
+    }
+  }
+
+  void _watch(RTCPeerConnection pc, String participant) {
     pc.onTrack = (event) {
       // Receivers created by the remote offer; on web the page hook already
       // attached them, since this callback runs too late there.
@@ -137,7 +172,6 @@ class MeshTransport implements CallTransport {
         unawaited(_redial(participant));
       }
     };
-    return pc;
   }
 
   Future<void> _redial(String participant) async {

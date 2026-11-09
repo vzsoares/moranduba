@@ -4,7 +4,8 @@
 // and &switch=1 to move the call to mesh and back mid-call, or &split=1 to
 // make the SFU unreachable for Bob so the call has to fall back to mesh. &hostpeer=1
 // lists the SFU as a host peer instead of the group's server. &push=1 turns
-// on push, so the SFU log shows push_subscribe and ring requests.
+// on push, so the SFU log shows push_subscribe and ring requests. &late=1
+// connects mic-only and turns the camera on afterwards.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
 import 'dart:js_interop';
@@ -35,6 +36,7 @@ final _sfu = _params['sfu'];
 final _split = _params['split'] != null;
 final _hostPeer = _params['hostpeer'] != null;
 final _sfuMode = _hostPeer ? 'host_peer' : 'server';
+final _late = _params['late'] != null;
 final _mode = _sfu == null || (_split && _role == 'bob') ? 'mesh' : _sfuMode;
 
 void _log(String line) => debugPrint('E2E $_role $line');
@@ -114,6 +116,18 @@ Future<void> _connected(Session session, GroupCall call, String peer) async {
     throw StateError('call went ${call.mode}, wanted $_mode');
   }
   _show(session, call);
+  if (_late) {
+    await _until('audio from peer', () async {
+      final links = (await call.stats())['links'];
+      return links is Map &&
+          switch (links[peer]) {
+            {'audioPackets': final int packets} => packets > 50,
+            _ => false,
+          };
+    });
+    await call.setCamera(true);
+    _log('camera on after connecting');
+  }
   try {
     await _until(
       'video from peer',
@@ -156,7 +170,7 @@ Future<void> _alice() async {
   }
   final call = await session.calls!.join(group!.id);
   if (!session.calls!.dialing) throw StateError('not dialing a new call');
-  await call.setCamera(true);
+  if (!_late) await call.setCamera(true);
   await _connected(session, call, peer);
   if (session.calls!.dialing) throw StateError('still dialing with bob in');
   _log('video from bob');
@@ -233,7 +247,7 @@ Future<void> _bob() async {
   _log('ringing');
   final call = await session.calls!.join(groupId);
   if (session.calls!.ringing != null) throw StateError('still ringing');
-  await call.setCamera(true);
+  if (!_late) await call.setCamera(true);
   await _connected(session, call, peer);
   _log('video from alice');
 
