@@ -9,19 +9,21 @@
   const e2ee = (window.morandubaE2ee = {
     worker: null,
     keyProviderId: null,
-    // By track id, for the receivers attached here.
+    // By "trackId@cryptorId": a track id can arrive on two links.
     states: {},
     receivers: [],
 
     handles(trackId) {
-      return e2ee.receivers.some((entry) => entry.trackId === trackId);
+      return e2ee.receivers.some(
+        (entry) => entry.trackId === trackId && entry.pc.connectionState !== "closed",
+      );
     },
 
     // Links close all call long (redials, relays, mode switches).
     purge() {
       e2ee.receivers = e2ee.receivers.filter((entry) => {
         if (entry.pc.connectionState !== "closed") return true;
-        delete e2ee.states[entry.trackId];
+        delete e2ee.states[entry.key];
         e2ee.worker?.postMessage({
           msgType: "dispose",
           msgId: randomId(),
@@ -38,10 +40,16 @@
       if (!worker) return Promise.resolve(0);
       const msgId = randomId();
       return new Promise((resolve) => {
+        // A worker built without the cryptorCount patch never answers.
+        const timeout = setTimeout(() => {
+          worker.removeEventListener("message", onMessage);
+          resolve(null);
+        }, 2000);
         const onMessage = (event) => {
           if (event.data?.msgId !== msgId) return;
+          clearTimeout(timeout);
           worker.removeEventListener("message", onMessage);
-          resolve(event.data.count ?? -1);
+          resolve(event.data.count ?? null);
         };
         worker.addEventListener("message", onMessage);
         worker.postMessage({ msgType: "cryptorCount", msgId });
@@ -59,7 +67,7 @@
           const data = event.data;
           if (data?.type !== "cryptorState") return;
           const entry = e2ee.receivers.find((e) => e.cryptorId === data.cryptorId);
-          if (entry) e2ee.states[entry.trackId] = data.state;
+          if (entry) e2ee.states[entry.key] = data.state;
         });
       }
     }
@@ -75,6 +83,7 @@
         if (!worker || !keyProviderId || event.receiver.transform) return;
         const trackId = event.track.id;
         const cryptorId = randomId();
+        const key = `${trackId}@${cryptorId}`;
         const transform = new RTCRtpScriptTransform(worker, {
           msgType: "decode",
           msgId: randomId(),
@@ -86,8 +95,8 @@
         });
         event.receiver.transform = transform;
         e2ee.purge();
-        e2ee.receivers.push({ receiver: event.receiver, transform, pc: this, trackId, cryptorId });
-        e2ee.states[trackId] = "new";
+        e2ee.receivers.push({ receiver: event.receiver, transform, pc: this, trackId, cryptorId, key });
+        e2ee.states[key] = "new";
         // The worker builds its cryptor disabled once the transform lands.
         let tries = 0;
         const enable = setInterval(() => {
@@ -98,7 +107,7 @@
             cryptorId,
             enabled: true,
           });
-          if (++tries >= 20 || e2ee.states[trackId] === "ok") {
+          if (++tries >= 20 || e2ee.states[key] === "ok") {
             clearInterval(enable);
           }
         }, 500);

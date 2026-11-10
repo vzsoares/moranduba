@@ -19,6 +19,14 @@ class _LinkCryptors {
   int get count => senders.length + receivers.length;
 }
 
+/// A cryptor's label and last reported state.
+class _Watched {
+  _Watched(this.label);
+
+  final String label;
+  FrameCryptorState state = FrameCryptorState.FrameCryptorStateNew;
+}
+
 /// Frame encryption for one call. The key comes from the group's MLS
 /// exporter; each epoch gets its own slot in the key ring, so frames sent
 /// under the previous epoch still decrypt during a membership change.
@@ -54,8 +62,7 @@ class CallCrypto {
   /// Links already released; a cryptor that finishes setting up for one is
   /// disposed at once.
   final Expando<bool> _released = Expando();
-  final Map<FrameCryptor, FrameCryptorState> _states = {};
-  final Map<FrameCryptor, String> _labels = {};
+  final Map<FrameCryptor, _Watched> _watched = {};
 
   /// Receiver tracks with a cryptor, or one on the way, by link: the same
   /// track id can arrive on a direct link and a relay link.
@@ -150,8 +157,7 @@ class CallCrypto {
     final owned = _links.remove(link);
     if (owned == null) return;
     for (final cryptor in [...owned.senders, ...owned.receivers]) {
-      _labels.remove(cryptor);
-      _states.remove(cryptor);
+      _watched.remove(cryptor);
       await _dispose(cryptor);
     }
   }
@@ -170,8 +176,8 @@ class CallCrypto {
   void _settleLater() {
     _settler ??= Timer.periodic(const Duration(seconds: 1), (_) async {
       final pending = [
-        for (final MapEntry(:key, :value) in _states.entries)
-          if (value == FrameCryptorState.FrameCryptorStateNew) key,
+        for (final MapEntry(:key, :value) in _watched.entries)
+          if (value.state == FrameCryptorState.FrameCryptorStateNew) key,
       ];
       for (final cryptor in pending) {
         await _apply(cryptor);
@@ -191,18 +197,14 @@ class CallCrypto {
   }
 
   void _watch(FrameCryptor cryptor, String label, _LinkCryptors owner) {
-    _labels[cryptor] = '$label@${owner.id}';
-    _states[cryptor] = FrameCryptorState.FrameCryptorStateNew;
+    final watched = _watched[cryptor] = _Watched('$label@${owner.id}');
     _settleLater();
-    cryptor.onFrameCryptorStateChanged = (_, state) {
-      if (_states.containsKey(cryptor)) _states[cryptor] = state;
-    };
+    cryptor.onFrameCryptorStateChanged = (_, state) => watched.state = state;
   }
 
   /// Sender and receiver cryptor states by label.
   Map<String, String> get allStates => {
-    for (final MapEntry(:key, :value) in _states.entries)
-      _labels[key] ?? '?': value.name,
+    for (final watched in _watched.values) watched.label: watched.state.name,
     for (final entry in receiverStates().entries)
       'in:${entry.key}': entry.value == 'ok'
           ? FrameCryptorState.FrameCryptorStateOk.name
@@ -214,8 +216,7 @@ class CallCrypto {
     _disposed = true;
     activateReceiverKeys(null);
     _settler?.cancel();
-    _labels.clear();
-    _states.clear();
+    _watched.clear();
     for (final link in [..._links.keys]) {
       await release(link);
     }

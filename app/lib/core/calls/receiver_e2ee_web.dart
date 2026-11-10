@@ -9,7 +9,7 @@ extension type _ReceiverE2ee._(JSObject _) implements JSObject {
   external JSObject get states;
   external bool handles(String trackId);
   external void purge();
-  external JSPromise<JSNumber> cryptorCount();
+  external JSPromise<JSNumber?> cryptorCount();
 }
 
 bool get receiversHandledByPage => _e2ee != null;
@@ -25,9 +25,10 @@ void activateReceiverKeys(String? keyProviderId) =>
 /// Frees the page's receiver cryptors of closed links.
 void releaseClosedReceivers() => _e2ee?.purge();
 
-/// Frame cryptors alive in dart_webrtc's worker; null off the web.
+/// Frame cryptors alive in dart_webrtc's worker; null off the web or when
+/// the worker does not answer.
 Future<int?> workerCryptorCount() async => switch (_e2ee) {
-  final e2ee? => (await e2ee.cryptorCount().toDart).toDartInt,
+  final e2ee? => (await e2ee.cryptorCount().toDart)?.toDartInt,
   null => null,
 };
 

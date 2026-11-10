@@ -43,10 +43,17 @@
    Future<void> setupTransform({
 --- a/lib/src/e2ee.worker/e2ee.worker.dart
 +++ b/lib/src/e2ee.worker/e2ee.worker.dart
-@@ -19,10 +19,19 @@
+@@ -19,10 +19,26 @@
  var participantDataCryptors = <E2EEDataPacketCryptor>[];
  var keyProviders = <String, KeyProvider>{};
  
++/// Cryptors disposed before their transform reached the worker
++/// (moranduba).
++var disposedEarly = <String>{};
++
++bool disposedBeforeSetup(String? cryptorId) =>
++    cryptorId != null && disposedEarly.remove(cryptorId);
++
 +/// The cryptors a message names: by cryptorId when it has one, else every
 +/// cryptor of its trackId (moranduba).
 +List<FrameCryptor> selectCryptors(String? cryptorId, String? trackId) =>
@@ -66,7 +73,7 @@
    if (cryptor == null) {
      logger.info(
          'creating new cryptor for $participantIdentity, trackId $trackId');
-@@ -32,6 +41,7 @@
+@@ -32,6 +48,7 @@
        participantIdentity: participantIdentity,
        trackId: trackId,
        keyHandler: keyProvider.getParticipantKeyHandler(participantIdentity),
@@ -74,7 +81,7 @@
      );
      //setupCryptorErrorEvents(cryptor);
      participantCryptors.add(cryptor);
-@@ -69,10 +79,8 @@
+@@ -69,10 +86,8 @@
    return cryptor;
  }
  
@@ -87,7 +94,7 @@
  }
  
  void unsetDataPacketCryptorParticipant(String dataCryptorId) {
-@@ -105,6 +113,7 @@
+@@ -105,6 +120,7 @@
        var codec = options.getProperty('codec'.toJS) as JSString?;
        var msgType = options.getProperty('msgType'.toJS) as JSString;
        var keyProviderId = options.getProperty('keyProviderId'.toJS) as JSString;
@@ -95,9 +102,11 @@
  
        var keyProvider = keyProviders[keyProviderId.toDart];
  
-@@ -113,8 +122,9 @@
+@@ -112,9 +128,11 @@
+         logger.warning('KeyProvider not found for $keyProviderId');
          return;
        }
++      if (disposedBeforeSetup(cryptorId?.toDart)) return;
  
 -      var cryptor =
 -          getTrackCryptor(participantId.toDart, trackId.toDart, keyProvider);
@@ -107,7 +116,7 @@
  
        cryptor.setupTransform(
            operation: msgType.toDart,
-@@ -130,6 +140,7 @@
+@@ -130,6 +148,7 @@
      var msg = e.data.dartify() as Map;
      var msgType = msg['msgType'];
      var msgId = msg['msgId'] as String?;
@@ -115,7 +124,7 @@
      logger.config('Got message $msgType, msgId $msgId');
      switch (msgType) {
        case 'keyProviderInit':
-@@ -183,8 +194,7 @@
+@@ -183,8 +202,7 @@
            var enabled = msg['enabled'] as bool;
            var trackId = msg['trackId'] as String;
  
@@ -125,17 +134,18 @@
            for (var cryptor in cryptors) {
              logger.config('Set enable $enabled for trackId ${cryptor.trackId}');
              cryptor.setEnabled(enabled);
-@@ -227,7 +237,8 @@
+@@ -227,7 +245,9 @@
              return;
            }
  
 -          var cryptor = getTrackCryptor(participantId, trackId, keyProvider);
++          if (disposedBeforeSetup(cryptorId)) return;
 +          var cryptor = getTrackCryptor(participantId, trackId, keyProvider,
 +              cryptorId: cryptorId);
  
            await cryptor.setupTransform(
              operation: msgType,
-@@ -253,7 +264,7 @@
+@@ -253,7 +273,7 @@
          {
            var trackId = msg['trackId'] as String;
            logger.config('Removing trackId $trackId');
@@ -144,7 +154,7 @@
            self.postMessage({
              'type': 'cryptorRemoved',
              'trackId': trackId,
-@@ -349,8 +360,7 @@
+@@ -349,8 +369,7 @@
            var keyIndex = msg['index'];
            var trackId = msg['trackId'] as String;
            logger.config('Setup key index for track $trackId');
@@ -154,7 +164,7 @@
            for (var c in cryptors) {
              logger.config('Set keyIndex for trackId ${c.trackId}');
              c.setKeyIndex(keyIndex);
-@@ -437,8 +447,7 @@
+@@ -437,8 +456,7 @@
            var codec = msg['codec'] as String;
            var trackId = msg['trackId'] as String;
            logger.config('Update codec for trackId $trackId, codec $codec');
@@ -164,7 +174,7 @@
            cryptor?.updateCodec(codec);
  
            self.postMessage({
-@@ -452,10 +461,13 @@
+@@ -452,10 +470,16 @@
          {
            var trackId = msg['trackId'] as String;
            logger.config('Dispose for trackId $trackId');
@@ -176,12 +186,15 @@
 +            c.dispose();
 +            participantCryptors.remove(c);
 +          }
++          if (cryptor == null && cryptorId != null) {
++            disposedEarly.add(cryptorId);
++          }
            if (cryptor != null) {
 -            cryptor.lastError = CryptorError.kDisposed;
              self.postMessage({
                'type': 'cryptorDispose',
                'participantId': cryptor.participantIdentity,
-@@ -471,6 +483,16 @@
+@@ -471,6 +495,16 @@
                'msgType': 'response',
              }.jsify());
            }

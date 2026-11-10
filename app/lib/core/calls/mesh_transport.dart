@@ -481,17 +481,12 @@ class MeshTransport implements CallTransport {
       for (final transceiver in await source.getTransceivers()) {
         final track = transceiver.receiver.track;
         if (track == null) continue;
-        final MediaStreamTrack forwarded;
-        if (cloneForwarded) {
-          forwarded = await track.clone();
-          serving.clones.add(forwarded);
-          // Stopped while cloning: _stopServing missed this one.
-          if (serving.stopped) {
-            await _stopClones(serving);
-            return;
-          }
-        } else {
-          forwarded = track;
+        final forwarded = cloneForwarded ? await track.clone() : track;
+        if (cloneForwarded) serving.clones.add(forwarded);
+        // Stopped mid-setup: _stopServing missed a clone made since.
+        if (serving.stopped) {
+          await _stopClones(serving);
+          return;
         }
         final sender = await relay.addTrack(forwarded, stream);
         await _host.crypto.encrypt(sender, _host.me, link: relay);
@@ -505,7 +500,7 @@ class MeshTransport implements CallTransport {
             callId: _host.callId,
             to: job.target,
             origin: job.origin,
-            sdp: out.blocked ? withoutCandidates(sdp) : sdp,
+            sdp: serving.blocked ? withoutCandidates(sdp) : sdp,
           ),
         );
       }

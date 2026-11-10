@@ -19,6 +19,13 @@ var participantCryptors = <FrameCryptor>[];
 var participantDataCryptors = <E2EEDataPacketCryptor>[];
 var keyProviders = <String, KeyProvider>{};
 
+/// Cryptors disposed before their transform reached the worker
+/// (moranduba).
+var disposedEarly = <String>{};
+
+bool disposedBeforeSetup(String? cryptorId) =>
+    cryptorId != null && disposedEarly.remove(cryptorId);
+
 /// The cryptors a message names: by cryptorId when it has one, else every
 /// cryptor of its trackId (moranduba).
 List<FrameCryptor> selectCryptors(String? cryptorId, String? trackId) =>
@@ -121,6 +128,7 @@ void main() async {
         logger.warning('KeyProvider not found for $keyProviderId');
         return;
       }
+      if (disposedBeforeSetup(cryptorId?.toDart)) return;
 
       var cryptor = getTrackCryptor(
           participantId.toDart, trackId.toDart, keyProvider,
@@ -237,6 +245,7 @@ void main() async {
             return;
           }
 
+          if (disposedBeforeSetup(cryptorId)) return;
           var cryptor = getTrackCryptor(participantId, trackId, keyProvider,
               cryptorId: cryptorId);
 
@@ -466,6 +475,9 @@ void main() async {
           for (var c in cryptors) {
             c.dispose();
             participantCryptors.remove(c);
+          }
+          if (cryptor == null && cryptorId != null) {
+            disposedEarly.add(cryptorId);
           }
           if (cryptor != null) {
             self.postMessage({

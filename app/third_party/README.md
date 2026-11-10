@@ -26,7 +26,8 @@ fixes the frame-encryption worker (`e2ee.worker.dart.js`):
   same local track shared one, and closing a link stopped state events for
   the others.
 - `dispose` removes the cryptor from the worker; it only marked it before,
-  so cryptors piled up across redials and relays.
+  so cryptors piled up across redials and relays. A dispose that arrives
+  before its transform keeps that transform from building one.
 - A `cryptorCount` message reports the cryptors alive, for the e2e tests.
 
 `web/e2ee_receivers.js` sends the same messages for the receivers it
