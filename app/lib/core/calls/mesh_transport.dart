@@ -24,6 +24,20 @@ class _Incoming {
   bool connected = false;
 }
 
+/// A relay link this device serves.
+class _Outgoing {
+  _Outgoing(this.pc, {required this.blocked});
+
+  final RTCPeerConnection pc;
+
+  /// [MeshTransport.relayBlocked] held when its offer went out.
+  final bool blocked;
+
+  /// Track clones it forwards, stopped with it.
+  final List<MediaStreamTrack> clones = [];
+  bool stopped = false;
+}
+
 /// Every participant connects to every other. For each pair the lower pubkey
 /// dials, so two offers never cross. A pair whose direct link fails gets its
 /// media through a third participant (ADR 0003).
@@ -32,7 +46,9 @@ class MeshTransport implements CallTransport {
     this._host, {
     this.iceServers = defaultIceServers,
     this.directBlocked,
+    this.relayBlocked,
     this.connect = openPeerConnection,
+    this.cloneForwarded = kIsWeb,
   });
 
   final CallHost _host;
@@ -42,6 +58,14 @@ class MeshTransport implements CallTransport {
   /// Tests: the direct link to these participants carries no candidates,
   /// so it fails.
   final bool Function(String participant)? directBlocked;
+
+  /// Tests: relay links this device serves to these participants carry no
+  /// candidates, so they fail.
+  final bool Function(String participant)? relayBlocked;
+
+  /// Forward clones of received tracks, so our own deafen or mute does not
+  /// reach them. Native flutter_webrtc cannot clone.
+  final bool cloneForwarded;
 
   final Map<String, RTCPeerConnection> _links = {};
 
@@ -55,7 +79,7 @@ class MeshTransport implements CallTransport {
   final Map<String, Timer> _timers = {};
   final Map<String, LinkReport> _reports = {};
   final Map<String, _Incoming> _incoming = {};
-  final Map<RelayJob, RTCPeerConnection?> _serving = {};
+  final Map<RelayJob, _Outgoing?> _serving = {};
   Timer? _replanTimer;
 
   /// Failed peers whose planned relay has until the timer to connect.
@@ -63,6 +87,9 @@ class MeshTransport implements CallTransport {
 
   /// Failed peers and the relay that failed or never connected for them.
   final Map<String, String> _relayGaveUp = {};
+
+  /// The state last handed to the host, by participant.
+  final Map<String, String> _published = {};
 
   /// Senders that already have a frame encryptor, by link: native sender
   /// ids are track ids, so they repeat across links.
@@ -148,8 +175,12 @@ class MeshTransport implements CallTransport {
         }
       case SignalType.relayAnswer:
         if (signal.origin case final origin?) {
-          await _serving[(origin: origin, target: from)]?.setRemoteDescription(
-            RTCSessionDescription(sdp, 'answer'),
+          final out = _serving[(origin: origin, target: from)];
+          await out?.pc.setRemoteDescription(
+            RTCSessionDescription(
+              out.blocked ? withoutCandidates(sdp) : sdp,
+              'answer',
+            ),
           );
         }
       default:
@@ -318,7 +349,8 @@ class MeshTransport implements CallTransport {
     _replan();
     if (_closed) return;
     for (final participant in [..._failed]) {
-      _publishState(participant);
+      final state = _stateOf(participant);
+      if (_published[participant] != state) _setState(participant, state);
     }
   }
 
@@ -364,11 +396,19 @@ class MeshTransport implements CallTransport {
     if (stream != null) _host.remoteStream(participant, stream);
   }
 
-  void _publishState(String participant, [String? direct]) {
+  void _publishState(String participant, [String? direct]) =>
+      _setState(participant, _stateOf(participant, direct));
+
+  void _setState(String participant, String state) {
+    _published[participant] = state;
+    _host.peerState(participant, state);
+  }
+
+  String _stateOf(String participant, [String? direct]) {
     final disconnected =
         direct ==
         RTCPeerConnectionState.RTCPeerConnectionStateDisconnected.name;
-    final state = _connected.contains(participant) && !disconnected
+    return _connected.contains(participant) && !disconnected
         ? 'connected'
         : _incoming[participant]?.connected ?? false
         ? 'relayed'
@@ -377,7 +417,6 @@ class MeshTransport implements CallTransport {
               ? 'relaying'
               : 'failed'
         : direct ?? 'connecting';
-    _host.peerState(participant, state);
   }
 
   /// Starts and stops the relay links this device serves.
@@ -409,18 +448,19 @@ class MeshTransport implements CallTransport {
       return;
     }
     _serving[job] = null;
-    RTCPeerConnection? pc;
+    _Outgoing? out;
     try {
-      pc = await connect(_config);
+      final relay = await connect(_config);
       if (_closed || !_serving.containsKey(job)) {
-        await _closeQuietly(pc, 'relay ${job.origin} to ${job.target}');
+        await _closeQuietly(relay, 'relay ${job.origin} to ${job.target}');
         return;
       }
-      _serving[job] = pc;
-      final relay = pc;
+      out = _Outgoing(relay, blocked: relayBlocked?.call(job.target) ?? false);
+      _serving[job] = out;
+      final serving = out;
       var connected = false;
       void retry() {
-        if (_serving[job] != relay) return;
+        if (_serving[job] != serving) return;
         unawaited(_stopServing(job).then((_) => _replanSoon()));
       }
 
@@ -441,50 +481,63 @@ class MeshTransport implements CallTransport {
       for (final transceiver in await source.getTransceivers()) {
         final track = transceiver.receiver.track;
         if (track == null) continue;
-        // On the web a clone, so our own deafen or mute does not reach it.
-        final forwarded = kIsWeb ? await track.clone() : track;
+        final MediaStreamTrack forwarded;
+        if (cloneForwarded) {
+          forwarded = await track.clone();
+          serving.clones.add(forwarded);
+          // Stopped while cloning: _stopServing missed this one.
+          if (serving.stopped) {
+            await _stopClones(serving);
+            return;
+          }
+        } else {
+          forwarded = track;
+        }
         final sender = await relay.addTrack(forwarded, stream);
         await _host.crypto.encrypt(sender, _host.me, link: relay);
       }
       await relay.setLocalDescription(await relay.createOffer());
       final offer = await gatheredDescription(relay);
-      if (offer?.sdp case final sdp?) {
+      if (offer?.sdp case final sdp? when !serving.stopped) {
         await _host.signal(
           CallSignal(
             type: SignalType.relayOffer,
             callId: _host.callId,
             to: job.target,
             origin: job.origin,
-            sdp: sdp,
+            sdp: out.blocked ? withoutCandidates(sdp) : sdp,
           ),
         );
       }
     } catch (e) {
       debugPrint('relay ${job.origin} to ${job.target}: $e');
-      if (_serving[job] == pc) {
+      // Both null when connect threw.
+      if (_serving[job] == out) {
         await _stopServing(job);
         _replanSoon();
+      } else if (out != null) {
+        await _stopClones(out);
       }
     }
   }
 
   Future<void> _stopServing(RelayJob job) async {
     if (!_serving.containsKey(job)) return;
-    final pc = _serving.remove(job);
-    if (pc == null) return;
-    for (final transceiver in await _safeTransceivers(pc)) {
-      if (kIsWeb) await transceiver.sender.track?.stop();
-    }
-    await _closeQuietly(pc, 'relay ${job.origin} to ${job.target}');
+    final out = _serving.remove(job);
+    if (out == null) return;
+    out.stopped = true;
+    await _closeQuietly(out.pc, 'relay ${job.origin} to ${job.target}');
+    await _stopClones(out);
   }
 
-  Future<List<RTCRtpTransceiver>> _safeTransceivers(
-    RTCPeerConnection pc,
-  ) async {
-    try {
-      return await pc.getTransceivers();
-    } catch (_) {
-      return const [];
+  Future<void> _stopClones(_Outgoing out) async {
+    for (final track in [...out.clones]) {
+      out.clones.remove(track);
+      try {
+        await track.stop();
+      } catch (e) {
+        debugPrint('stop relayed track: $e');
+      }
     }
   }
 
@@ -581,6 +634,7 @@ class MeshTransport implements CallTransport {
       await _closeIncoming(origin);
     }
     _failed.remove(participant);
+    _published.remove(participant);
     _host.peerGone(participant);
     if (!_closed) _linksChanged();
   }

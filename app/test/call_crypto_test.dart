@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -11,17 +13,23 @@ import 'support/fake_webrtc.dart';
 
 const _connected = RTCPeerConnectionState.RTCPeerConnectionStateConnected;
 const _failed = RTCPeerConnectionState.RTCPeerConnectionStateFailed;
+const _ok = FrameCryptorState.FrameCryptorStateOk;
 
 /// Runs [body] on fake time, with the host and mesh it builds for [me].
 void _onFakeTime(
   String me,
-  void Function(FakeAsync time, FakeHost host, MeshTransport mesh) body,
-) {
+  void Function(FakeAsync time, FakeHost host, MeshTransport mesh) body, {
+  bool cloneForwarded = false,
+}) {
   fakeAsync((time) {
     late FakeHost host;
     FakeHost.create(me).then((h) => host = h);
     time.flushMicrotasks();
-    final mesh = MeshTransport(host, connect: host.connect);
+    final mesh = MeshTransport(
+      host,
+      connect: host.connect,
+      cloneForwarded: cloneForwarded,
+    );
     body(time, host, mesh);
     mesh.close();
     time.flushMicrotasks();
@@ -73,9 +81,14 @@ FakePeerConnection _answerUp(
   return pc;
 }
 
+Iterable<FakeTrack> get _liveClones => clones.where((t) => !t.stopped);
+
 void main() {
+  setUp(clones.clear);
+  tearDown(() => cloneGate = null);
+
   test('relay links that keep failing do not pile up cryptors', () {
-    _onFakeTime('c', (time, host, mesh) {
+    _onFakeTime('c', cloneForwarded: true, (time, host, mesh) {
       _answerUp(time, host, mesh, 'a');
       _answerUp(time, host, mesh, 'b');
       // Two direct links: audio and video out, audio and video in.
@@ -89,14 +102,130 @@ void main() {
         expect(relays, hasLength(2), reason: 'attempt $attempt');
         expect(host.crypto.cryptorCount, 12, reason: 'attempt $attempt');
         _consistent(host);
+        expect(_liveClones, hasLength(4));
         for (final relay in relays) {
           relay.setState(_failed);
         }
         time.flushMicrotasks();
         expect(host.crypto.cryptorCount, 8);
+        expect(_liveClones, isEmpty);
         time.elapse(const Duration(seconds: 6));
       }
       expect(host.links.length, greaterThanOrEqualTo(2 + 12 * 2));
+    });
+  });
+
+  test('a relay stopped while cloning stops the clones it made', () {
+    _onFakeTime('c', cloneForwarded: true, (time, host, mesh) {
+      _answerUp(time, host, mesh, 'a');
+      _answerUp(time, host, mesh, 'b');
+      cloneGate = Completer<void>();
+      mesh
+        ..participantLinks('a', const LinkReport(links: {'c'}, failed: {'b'}))
+        ..participantLinks('b', const LinkReport(links: {'c'}, failed: {'a'}));
+      time.flushMicrotasks();
+      expect(host.open, hasLength(4));
+      // Alice and Bob connect directly, so the relays are not needed.
+      mesh
+        ..participantLinks('a', const LinkReport(links: {'b', 'c'}))
+        ..participantLinks('b', const LinkReport(links: {'a', 'c'}));
+      time.flushMicrotasks();
+      expect(host.open, hasLength(2));
+      cloneGate!.complete();
+      cloneGate = null;
+      time.flushMicrotasks();
+      expect(clones, isNotEmpty);
+      expect(_liveClones, isEmpty);
+      expect(
+        host.signals.where((s) => s.type == SignalType.relayOffer),
+        isEmpty,
+      );
+      _consistent(host);
+    });
+  });
+
+  test('a track id on two links gets a decryptor on each', () {
+    _onFakeTime('b', (time, host, mesh) {
+      // Native relays forward the received track itself, under its id.
+      host.remoteIds = const {'audio': 'a-mic', 'video': 'a-cam'};
+      mesh
+        ..participantLinks('a', const LinkReport(failed: {'b'}))
+        ..participantLinks('c', const LinkReport(links: {'a', 'b'}));
+      mesh.onSignal('a', _offer('b'));
+      time.flushMicrotasks();
+      host.links.last.deliverTracks();
+      time.flushMicrotasks();
+      // Audio and video out, audio and video in.
+      expect(host.crypto.cryptorCount, 4);
+      for (var attempt = 0; attempt < 3; attempt++) {
+        mesh.onSignal('c', _offer('b', origin: 'a'));
+        time.flushMicrotasks();
+        host.links.last.deliverTracks();
+        time.flushMicrotasks();
+        expect(host.crypto.cryptorCount, 6, reason: 'attempt $attempt');
+        _consistent(host);
+      }
+    });
+  });
+
+  test('a failed peer is reported again only when its state changes', () {
+    _onFakeTime('b', (time, host, mesh) {
+      mesh.participantLinks('a', const LinkReport(failed: {'b'}));
+      mesh.onSignal('a', _offer('b'));
+      time.flushMicrotasks();
+      host.links.last.setState(_failed);
+      time.flushMicrotasks();
+      expect(host.states['a'], 'failed');
+      final before = host.stateLog.length;
+      for (var i = 1; i <= 5; i++) {
+        mesh.participantLinks(
+          'd',
+          LinkReport(links: {for (var j = 0; j < i; j++) 'e$j'}),
+        );
+        time.flushMicrotasks();
+      }
+      expect(host.stateLog.skip(before).where((e) => e.$1 == 'a'), isEmpty);
+      mesh.participantLinks('c', const LinkReport(links: {'a', 'b'}));
+      time.flushMicrotasks();
+      expect(host.stateLog.last, ('a', 'relaying'));
+    });
+  });
+
+  test('each link keeps its own cryptor state', () {
+    fakeAsync((time) {
+      late FakeHost host;
+      FakeHost.create('me').then((h) => host = h);
+      time.flushMicrotasks();
+      final mic = FakeTrack('audio', id: 'mic');
+      final links = [
+        FakePeerConnection(host.factory.log),
+        FakePeerConnection(host.factory.log),
+      ];
+      for (final pc in links) {
+        pc.addTrack(mic).then((s) => host.crypto.encrypt(s, 'me', link: pc));
+        time.flushMicrotasks();
+      }
+      final [first, second] = [...host.factory.live];
+      first.onFrameCryptorStateChanged?.call('me', _ok);
+      expect(host.crypto.allStates, hasLength(2));
+      expect(
+        host.crypto.allStates.values,
+        contains(FrameCryptorState.FrameCryptorStateNew.name),
+      );
+      second.onFrameCryptorStateChanged?.call('me', _ok);
+      expect(host.crypto.allStates.values, everyElement(_ok.name));
+      links.first.close();
+      host.crypto.release(links.first);
+      time.flushMicrotasks();
+      first.onFrameCryptorStateChanged?.call(
+        'me',
+        FrameCryptorState.FrameCryptorStateEncryptionFailed,
+      );
+      expect(host.crypto.allStates.values, [_ok.name]);
+      links.last.close();
+      host.crypto.dispose();
+      time.flushMicrotasks();
+      expect(host.factory.live, isEmpty);
     });
   });
 

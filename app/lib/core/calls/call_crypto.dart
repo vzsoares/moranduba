@@ -8,9 +8,13 @@ import 'receiver_e2ee.dart';
 
 /// The cryptors of one peer connection.
 class _LinkCryptors {
+  _LinkCryptors(this.id);
+
+  /// Sets its cryptors' labels apart from other links sending the same
+  /// track.
+  final int id;
   final List<FrameCryptor> senders = [];
   final List<FrameCryptor> receivers = [];
-  final Map<FrameCryptor, String> receiverTracks = {};
 
   int get count => senders.length + receivers.length;
 }
@@ -50,9 +54,13 @@ class CallCrypto {
   /// Links already released; a cryptor that finishes setting up for one is
   /// disposed at once.
   final Expando<bool> _released = Expando();
-  final Map<String, FrameCryptorState> states = {};
+  final Map<FrameCryptor, FrameCryptorState> _states = {};
   final Map<FrameCryptor, String> _labels = {};
-  final Set<String> _decrypting = {};
+
+  /// Receiver tracks with a cryptor, or one on the way, by link: the same
+  /// track id can arrive on a direct link and a relay link.
+  final Map<RTCPeerConnection, Set<String>> _decrypting = {};
+  int _linkIds = 0;
   Timer? _settler;
   int? _index;
   bool _disposed = false;
@@ -94,10 +102,13 @@ class CallCrypto {
       keyProvider: _keys,
     );
     if (_gone(link)) return _dispose(cryptor);
-    _watch(cryptor, 'out:${sender.track?.kind}:${sender.track?.id}');
-    (_links[link] ??= _LinkCryptors()).senders.add(cryptor);
+    final owner = _owner(link)..senders.add(cryptor);
+    _watch(cryptor, 'out:${sender.track?.kind}:${sender.track?.id}', owner);
     await _apply(cryptor);
   }
+
+  _LinkCryptors _owner(RTCPeerConnection link) =>
+      _links[link] ??= _LinkCryptors(_linkIds++);
 
   /// Attach right after the transceiver exists: Chrome ignores a receiver
   /// transform added once frames may have arrived. Returns false when the
@@ -108,7 +119,10 @@ class CallCrypto {
     required RTCPeerConnection link,
   }) async {
     final trackId = receiver.track?.id;
-    if (trackId == null || _gone(link) || !_decrypting.add(trackId)) {
+    if (trackId == null ||
+        _gone(link) ||
+        pageDecrypts(trackId) ||
+        !(_decrypting[link] ??= {}).add(trackId)) {
       return false;
     }
     final cryptor = await _factory.createFrameCryptorForRtpReceiver(
@@ -118,14 +132,11 @@ class CallCrypto {
       keyProvider: _keys,
     );
     if (_gone(link)) {
-      _decrypting.remove(trackId);
       await _dispose(cryptor);
       return false;
     }
-    _watch(cryptor, 'in:${receiver.track?.kind}:${receiver.track?.id}');
-    final owner = _links[link] ??= _LinkCryptors();
-    owner.receivers.add(cryptor);
-    owner.receiverTracks[cryptor] = trackId;
+    final owner = _owner(link)..receivers.add(cryptor);
+    _watch(cryptor, 'in:${receiver.track?.kind}:$trackId', owner);
     await _apply(cryptor);
     return true;
   }
@@ -134,13 +145,13 @@ class CallCrypto {
   /// disposed while its sender still runs would stop encrypting it.
   Future<void> release(RTCPeerConnection link) async {
     _released[link] = true;
+    _decrypting.remove(link);
+    releaseClosedReceivers();
     final owned = _links.remove(link);
     if (owned == null) return;
-    _decrypting.removeAll(owned.receiverTracks.values);
     for (final cryptor in [...owned.senders, ...owned.receivers]) {
-      final label = _labels.remove(cryptor);
-      // The same local track is encrypted once per link, under one label.
-      if (label != null && !_labels.containsValue(label)) states.remove(label);
+      _labels.remove(cryptor);
+      _states.remove(cryptor);
       await _dispose(cryptor);
     }
   }
@@ -159,9 +170,8 @@ class CallCrypto {
   void _settleLater() {
     _settler ??= Timer.periodic(const Duration(seconds: 1), (_) async {
       final pending = [
-        for (final entry in _labels.entries)
-          if (states[entry.value] == FrameCryptorState.FrameCryptorStateNew)
-            entry.key,
+        for (final MapEntry(:key, :value) in _states.entries)
+          if (value == FrameCryptorState.FrameCryptorStateNew) key,
       ];
       for (final cryptor in pending) {
         await _apply(cryptor);
@@ -180,16 +190,19 @@ class CallCrypto {
     }
   }
 
-  void _watch(FrameCryptor cryptor, String label) {
-    _labels[cryptor] = label;
-    states[label] = FrameCryptorState.FrameCryptorStateNew;
+  void _watch(FrameCryptor cryptor, String label, _LinkCryptors owner) {
+    _labels[cryptor] = '$label@${owner.id}';
+    _states[cryptor] = FrameCryptorState.FrameCryptorStateNew;
     _settleLater();
-    cryptor.onFrameCryptorStateChanged = (_, state) => states[label] = state;
+    cryptor.onFrameCryptorStateChanged = (_, state) {
+      if (_states.containsKey(cryptor)) _states[cryptor] = state;
+    };
   }
 
   /// Sender and receiver cryptor states by label.
   Map<String, String> get allStates => {
-    for (final entry in states.entries) entry.key: entry.value.name,
+    for (final MapEntry(:key, :value) in _states.entries)
+      _labels[key] ?? '?': value.name,
     for (final entry in receiverStates().entries)
       'in:${entry.key}': entry.value == 'ok'
           ? FrameCryptorState.FrameCryptorStateOk.name
@@ -202,7 +215,7 @@ class CallCrypto {
     activateReceiverKeys(null);
     _settler?.cancel();
     _labels.clear();
-    states.clear();
+    _states.clear();
     for (final link in [..._links.keys]) {
       await release(link);
     }

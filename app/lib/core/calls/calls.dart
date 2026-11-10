@@ -114,12 +114,16 @@ class Calls extends ChangeNotifier {
   /// carry them.
   bool Function(String participant)? directBlocked;
 
+  /// Tests: relay links this device serves to these participants fail.
+  bool Function(String participant)? relayBlocked;
+
   List<Map<String, String>> get _turn => turnServers?.call() ?? const [];
 
   CallTransport _mesh(CallHost host) => MeshTransport(
     host,
     iceServers: [..._turn, ...defaultIceServers],
     directBlocked: directBlocked,
+    relayBlocked: relayBlocked,
   );
 
   /// Pings an SFU; tests swap it to make one unreachable.

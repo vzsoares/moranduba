@@ -134,10 +134,14 @@ class FrameCryptor {
     required this.participantIdentity,
     required this.trackId,
     required this.keyHandler,
+    this.cryptorId,
   });
   Map<int, int> sendCounts = {};
   String? participantIdentity;
   String? trackId;
+
+  /// Names this cryptor apart from others on the same track (moranduba).
+  final String? cryptorId;
   String? codec;
   ParticipantKeyHandler keyHandler;
   KeyOptions get keyOptions => keyHandler.keyOptions;
@@ -161,6 +165,14 @@ class FrameCryptor {
 
   void unsetParticipant() {
     participantIdentity = null;
+  }
+
+  /// Stops it for good; frames still in its pipe are dropped or passed
+  /// as [KeyOptions.discardFrameWhenCryptorNotReady] says.
+  void dispose() {
+    _enabled = false;
+    lastError = CryptorError.kDisposed;
+    unsetParticipant();
   }
 
   void setKeyIndex(int keyIndex) {
@@ -227,8 +239,8 @@ class FrameCryptor {
     return iv.buffer.asUint8List();
   }
 
-  void postMessage(Object message) {
-    worker.postMessage(message.jsify());
+  void postMessage(Map<String, Object?> message) {
+    worker.postMessage({...message, 'cryptorId': cryptorId}.jsify());
   }
 
   Future<void> setupTransform({

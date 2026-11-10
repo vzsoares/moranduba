@@ -99,6 +99,7 @@ const results = roles.map(async (role, i) => {
           same: x.receiver.transform === x.transform,
           kind: x.receiver.track.kind,
           pcs: x.pc.connectionState,
+          cryptorId: x.cryptorId,
         })),
       );
       console.log(`${role} receivers:`, JSON.stringify(report));
@@ -112,7 +113,7 @@ const timeout = new Promise<boolean[]>((resolve) =>
   setTimeout(() => {
     console.log("E2E TIMEOUT");
     resolve([false]);
-  }, 240_000),
+  }, 420_000),
 );
 const outcome = await Promise.race([Promise.all(results), timeout]);
 await browser.close();

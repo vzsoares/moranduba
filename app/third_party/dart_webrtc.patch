@@ -1,0 +1,356 @@
+--- a/lib/src/e2ee.worker/e2ee.frame_cryptor.dart
++++ b/lib/src/e2ee.worker/e2ee.frame_cryptor.dart
+@@ -134,10 +134,14 @@
+     required this.participantIdentity,
+     required this.trackId,
+     required this.keyHandler,
++    this.cryptorId,
+   });
+   Map<int, int> sendCounts = {};
+   String? participantIdentity;
+   String? trackId;
++
++  /// Names this cryptor apart from others on the same track (moranduba).
++  final String? cryptorId;
+   String? codec;
+   ParticipantKeyHandler keyHandler;
+   KeyOptions get keyOptions => keyHandler.keyOptions;
+@@ -163,6 +167,14 @@
+     participantIdentity = null;
+   }
+ 
++  /// Stops it for good; frames still in its pipe are dropped or passed
++  /// as [KeyOptions.discardFrameWhenCryptorNotReady] says.
++  void dispose() {
++    _enabled = false;
++    lastError = CryptorError.kDisposed;
++    unsetParticipant();
++  }
++
+   void setKeyIndex(int keyIndex) {
+     if (lastError != CryptorError.kOk) {
+       logger.info(
+@@ -227,8 +239,8 @@
+     return iv.buffer.asUint8List();
+   }
+ 
+-  void postMessage(Object message) {
+-    worker.postMessage(message.jsify());
++  void postMessage(Map<String, Object?> message) {
++    worker.postMessage({...message, 'cryptorId': cryptorId}.jsify());
+   }
+ 
+   Future<void> setupTransform({
+--- a/lib/src/e2ee.worker/e2ee.worker.dart
++++ b/lib/src/e2ee.worker/e2ee.worker.dart
+@@ -19,10 +19,19 @@
+ var participantDataCryptors = <E2EEDataPacketCryptor>[];
+ var keyProviders = <String, KeyProvider>{};
+ 
++/// The cryptors a message names: by cryptorId when it has one, else every
++/// cryptor of its trackId (moranduba).
++List<FrameCryptor> selectCryptors(String? cryptorId, String? trackId) =>
++    participantCryptors
++        .where((c) => cryptorId != null
++            ? c.cryptorId == cryptorId
++            : c.trackId == trackId)
++        .toList();
++
+ FrameCryptor getTrackCryptor(
+-    String participantIdentity, String trackId, KeyProvider keyProvider) {
+-  var cryptor =
+-      participantCryptors.firstWhereOrNull((c) => c.trackId == trackId);
++    String participantIdentity, String trackId, KeyProvider keyProvider,
++    {String? cryptorId}) {
++  var cryptor = selectCryptors(cryptorId, trackId).firstOrNull;
+   if (cryptor == null) {
+     logger.info(
+         'creating new cryptor for $participantIdentity, trackId $trackId');
+@@ -32,6 +41,7 @@
+       participantIdentity: participantIdentity,
+       trackId: trackId,
+       keyHandler: keyProvider.getParticipantKeyHandler(participantIdentity),
++      cryptorId: cryptorId,
+     );
+     //setupCryptorErrorEvents(cryptor);
+     participantCryptors.add(cryptor);
+@@ -69,10 +79,8 @@
+   return cryptor;
+ }
+ 
+-void unsetCryptorParticipant(String trackId) {
+-  participantCryptors
+-      .firstWhereOrNull((c) => c.trackId == trackId)
+-      ?.unsetParticipant();
++void unsetCryptorParticipant(String? cryptorId, String trackId) {
++  selectCryptors(cryptorId, trackId).firstOrNull?.unsetParticipant();
+ }
+ 
+ void unsetDataPacketCryptorParticipant(String dataCryptorId) {
+@@ -105,6 +113,7 @@
+       var codec = options.getProperty('codec'.toJS) as JSString?;
+       var msgType = options.getProperty('msgType'.toJS) as JSString;
+       var keyProviderId = options.getProperty('keyProviderId'.toJS) as JSString;
++      var cryptorId = options.getProperty('cryptorId'.toJS) as JSString?;
+ 
+       var keyProvider = keyProviders[keyProviderId.toDart];
+ 
+@@ -113,8 +122,9 @@
+         return;
+       }
+ 
+-      var cryptor =
+-          getTrackCryptor(participantId.toDart, trackId.toDart, keyProvider);
++      var cryptor = getTrackCryptor(
++          participantId.toDart, trackId.toDart, keyProvider,
++          cryptorId: cryptorId?.toDart);
+ 
+       cryptor.setupTransform(
+           operation: msgType.toDart,
+@@ -130,6 +140,7 @@
+     var msg = e.data.dartify() as Map;
+     var msgType = msg['msgType'];
+     var msgId = msg['msgId'] as String?;
++    var cryptorId = msg['cryptorId'] as String?;
+     logger.config('Got message $msgType, msgId $msgId');
+     switch (msgType) {
+       case 'keyProviderInit':
+@@ -183,8 +194,7 @@
+           var enabled = msg['enabled'] as bool;
+           var trackId = msg['trackId'] as String;
+ 
+-          var cryptors =
+-              participantCryptors.where((c) => c.trackId == trackId).toList();
++          var cryptors = selectCryptors(cryptorId, trackId);
+           for (var cryptor in cryptors) {
+             logger.config('Set enable $enabled for trackId ${cryptor.trackId}');
+             cryptor.setEnabled(enabled);
+@@ -227,7 +237,8 @@
+             return;
+           }
+ 
+-          var cryptor = getTrackCryptor(participantId, trackId, keyProvider);
++          var cryptor = getTrackCryptor(participantId, trackId, keyProvider,
++              cryptorId: cryptorId);
+ 
+           await cryptor.setupTransform(
+             operation: msgType,
+@@ -253,7 +264,7 @@
+         {
+           var trackId = msg['trackId'] as String;
+           logger.config('Removing trackId $trackId');
+-          unsetCryptorParticipant(trackId);
++          unsetCryptorParticipant(cryptorId, trackId);
+           self.postMessage({
+             'type': 'cryptorRemoved',
+             'trackId': trackId,
+@@ -349,8 +360,7 @@
+           var keyIndex = msg['index'];
+           var trackId = msg['trackId'] as String;
+           logger.config('Setup key index for track $trackId');
+-          var cryptors =
+-              participantCryptors.where((c) => c.trackId == trackId).toList();
++          var cryptors = selectCryptors(cryptorId, trackId);
+           for (var c in cryptors) {
+             logger.config('Set keyIndex for trackId ${c.trackId}');
+             c.setKeyIndex(keyIndex);
+@@ -437,8 +447,7 @@
+           var codec = msg['codec'] as String;
+           var trackId = msg['trackId'] as String;
+           logger.config('Update codec for trackId $trackId, codec $codec');
+-          var cryptor =
+-              participantCryptors.firstWhereOrNull((c) => c.trackId == trackId);
++          var cryptor = selectCryptors(cryptorId, trackId).firstOrNull;
+           cryptor?.updateCodec(codec);
+ 
+           self.postMessage({
+@@ -452,10 +461,13 @@
+         {
+           var trackId = msg['trackId'] as String;
+           logger.config('Dispose for trackId $trackId');
+-          var cryptor =
+-              participantCryptors.firstWhereOrNull((c) => c.trackId == trackId);
++          var cryptors = selectCryptors(cryptorId, trackId);
++          var cryptor = cryptors.firstOrNull;
++          for (var c in cryptors) {
++            c.dispose();
++            participantCryptors.remove(c);
++          }
+           if (cryptor != null) {
+-            cryptor.lastError = CryptorError.kDisposed;
+             self.postMessage({
+               'type': 'cryptorDispose',
+               'participantId': cryptor.participantIdentity,
+@@ -471,6 +483,16 @@
+               'msgType': 'response',
+             }.jsify());
+           }
++        }
++        break;
++      case 'cryptorCount':
++        {
++          self.postMessage({
++            'type': 'cryptorCount',
++            'count': participantCryptors.length,
++            'msgId': msgId,
++            'msgType': 'response',
++          }.jsify());
+         }
+         break;
+       case 'dataCryptorEncrypt':
+--- a/lib/src/frame_cryptor_impl.dart
++++ b/lib/src/frame_cryptor_impl.dart
+@@ -4,7 +4,6 @@
+ import 'dart:js_interop_unsafe';
+ import 'dart:typed_data';
+ 
+-import 'package:collection/collection.dart';
+ import 'package:web/web.dart' as web;
+ import 'package:webrtc_interface/webrtc_interface.dart';
+ 
+@@ -49,8 +48,13 @@
+     this.jsSender,
+     this.jsReceiver,
+     required this.keyProvider,
++    required this.cryptorId,
+   });
+   web.Worker worker;
++
++  /// Tells this cryptor apart from other links' cryptors of the same track,
++  /// in the worker and in its state events (moranduba).
++  final String cryptorId;
+   bool _enabled = false;
+   int _keyIndex = 0;
+   final String _participantId;
+@@ -64,10 +68,15 @@
+   Future<void> dispose() async {
+     var msgId = randomString(12);
+     worker.postMessage(
+-      {'msgType': 'dispose', 'msgId': msgId, 'trackId': _trackId}.jsify(),
++      {
++        'msgType': 'dispose',
++        'msgId': msgId,
++        'trackId': _trackId,
++        'cryptorId': cryptorId,
++      }.jsify(),
+     );
+     _enabled = false;
+-    _factory.removeFrameCryptor(_trackId);
++    _factory.removeFrameCryptor(cryptorId);
+     return;
+   }
+ 
+@@ -90,6 +99,7 @@
+         'msgType': 'enable',
+         'msgId': msgId,
+         'trackId': _trackId,
++        'cryptorId': cryptorId,
+         'enabled': enabled,
+       }.jsify(),
+     );
+@@ -105,6 +115,7 @@
+         'msgType': 'setKeyIndex',
+         'msgId': msgId,
+         'trackId': _trackId,
++        'cryptorId': cryptorId,
+         'index': index,
+       }.jsify(),
+     );
+@@ -120,6 +131,7 @@
+         'msgType': 'updateCodec',
+         'msgId': msgId,
+         'trackId': _trackId,
++        'cryptorId': cryptorId,
+         'codec': codec,
+       }.jsify(),
+     );
+@@ -398,11 +410,8 @@
+         events.emit(WorkerResponse(msgId, data));
+       } else if (msgType == 'event') {
+         if (type == 'cryptorState') {
+-          var trackId = data['trackId'];
+           var participantId = data['participantId'];
+-          var frameCryptor = _frameCryptors.values.firstWhereOrNull(
+-            (element) => (element as FrameCryptorImpl).trackId == trackId,
+-          );
++          var frameCryptor = _frameCryptors[data['cryptorId']];
+           var state = data['state'];
+           var frameCryptorState = FrameCryptorState.FrameCryptorStateNew;
+           switch (state) {
+@@ -477,6 +486,7 @@
+ 
+     var trackId = jsReceiver.track.id;
+     var kind = jsReceiver.track.kind;
++    var cryptorId = randomString(12);
+ 
+     if (web.window.hasProperty('RTCRtpScriptTransform'.toJS).toDart) {
+       print('support RTCRtpScriptTransform');
+@@ -488,6 +498,7 @@
+         'kind': kind,
+         'participantId': participantId,
+         'trackId': trackId,
++        'cryptorId': cryptorId,
+       };
+ 
+       jsReceiver.transform = web.RTCRtpScriptTransform(worker, options.jsify());
+@@ -518,6 +529,7 @@
+             'exist': exist,
+             'participantId': participantId,
+             'trackId': trackId,
++            'cryptorId': cryptorId,
+             'options': keyProvider.options.toJson(),
+             'readableStream': readable,
+             'writableStream': writable,
+@@ -536,8 +548,9 @@
+       trackId,
+       jsReceiver: jsReceiver,
+       keyProvider: keyProvider,
++      cryptorId: cryptorId,
+     );
+-    _frameCryptors[trackId] = cryptor;
++    _frameCryptors[cryptorId] = cryptor;
+     return Future.value(cryptor);
+   }
+ 
+@@ -551,6 +564,7 @@
+     var jsSender = (sender as RTCRtpSenderWeb).jsRtpSender;
+     var trackId = jsSender.track?.id ?? sender.senderId;
+     var kind = jsSender.track!.kind;
++    var cryptorId = randomString(12);
+ 
+     if (web.window.hasProperty('RTCRtpScriptTransform'.toJS).toDart) {
+       print('support RTCRtpScriptTransform');
+@@ -562,6 +576,7 @@
+         'kind': kind,
+         'participantId': participantId,
+         'trackId': trackId,
++        'cryptorId': cryptorId,
+         'options': keyProvider.options.toJson(),
+       };
+       print('object: ${options['keyProviderId']}');
+@@ -593,6 +608,7 @@
+             'exist': exist,
+             'participantId': participantId,
+             'trackId': trackId,
++            'cryptorId': cryptorId,
+             'options': keyProvider.options.toJson(),
+             'readableStream': readable,
+             'writableStream': writable,
+@@ -611,13 +627,14 @@
+       trackId,
+       jsSender: jsSender,
+       keyProvider: keyProvider,
++      cryptorId: cryptorId,
+     );
+-    _frameCryptors[trackId] = cryptor;
++    _frameCryptors[cryptorId] = cryptor;
+ 
+     return Future.value(cryptor);
+   }
+ 
+-  void removeFrameCryptor(String trackId) {
+-    _frameCryptors.remove(trackId);
++  void removeFrameCryptor(String cryptorId) {
++    _frameCryptors.remove(cryptorId);
+   }
+ }

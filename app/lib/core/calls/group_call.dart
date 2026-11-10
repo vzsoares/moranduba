@@ -9,6 +9,7 @@ import 'call_crypto.dart';
 import 'call_quality.dart';
 import 'call_signal.dart';
 import 'mesh_transport.dart';
+import 'receiver_e2ee.dart';
 import 'relay_plan.dart';
 import 'screen_capture.dart';
 import 'transport.dart';
@@ -656,6 +657,7 @@ class GroupCall extends ChangeNotifier implements CallHost {
     'sfu': ?_transport.sfu,
     'keyIndex': crypto.keyIndex,
     'cryptoLinks': crypto.linkCount,
+    'workerCryptors': ?await workerCryptorCount(),
     'epoch': _keyEpoch,
     'links': {
       for (final entry in (await _transport.stats()).entries)

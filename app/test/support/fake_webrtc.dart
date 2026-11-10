@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -10,11 +11,18 @@ import 'package:moranduba/core/calls/transport.dart';
 var _ids = 0;
 String _next(String prefix) => '$prefix${_ids++}';
 
+/// Every clone made, in order.
+final List<FakeTrack> clones = [];
+
+/// While set, clones wait for it, so a test can act mid-clone.
+Completer<void>? cloneGate;
+
 class FakeTrack extends MediaStreamTrack {
-  FakeTrack(this._kind) : _id = _next('track');
+  FakeTrack(this._kind, {String? id}) : _id = id ?? _next('track');
 
   final String _kind;
   final String _id;
+  bool stopped = false;
 
   @override
   String get id => _id;
@@ -23,10 +31,18 @@ class FakeTrack extends MediaStreamTrack {
   String get kind => _kind;
 
   @override
-  Future<MediaStreamTrack> clone() async => FakeTrack(_kind);
+  String toString() => 'FakeTrack($_id, $_kind, stopped: $stopped)';
 
   @override
-  Future<void> stop() async {}
+  Future<MediaStreamTrack> clone() async {
+    await cloneGate?.future;
+    final clone = FakeTrack(_kind);
+    clones.add(clone);
+    return clone;
+  }
+
+  @override
+  Future<void> stop() async => stopped = true;
 
   @override
   Never noSuchMethod(Invocation invocation) =>
@@ -120,10 +136,14 @@ class FakeChannel extends RTCDataChannel {
 }
 
 class FakePeerConnection extends RTCPeerConnection {
-  FakePeerConnection(this._log) : name = _next('pc');
+  FakePeerConnection(this._log, {this.remoteIds = const {}})
+    : name = _next('pc');
 
   final String name;
   final List<String> _log;
+
+  /// Track ids the far end's media arrives with, by kind; fresh otherwise.
+  final Map<String, String> remoteIds;
   final List<FakeTransceiver> _transceivers = [];
   RTCSessionDescription? _local;
   bool closed = false;
@@ -132,7 +152,7 @@ class FakePeerConnection extends RTCPeerConnection {
   final FakeStream remote = FakeStream(_next('stream'), []);
 
   FakeTransceiver _add(String kind, MediaStreamTrack? sending) {
-    final incoming = FakeTrack(kind);
+    final incoming = FakeTrack(kind, id: remoteIds[kind]);
     remote.tracks.add(incoming);
     final transceiver = FakeTransceiver(
       FakeSender(this, sending),
@@ -356,13 +376,19 @@ class FakeHost implements CallHost {
   final List<CallSignal> signals = [];
   final Map<String, String> states = {};
 
+  /// Every peer state handed over, in order.
+  final List<(String, String)> stateLog = [];
+
+  /// See [FakePeerConnection.remoteIds]; applies to links opened later.
+  Map<String, String> remoteIds = const {};
+
   late final FakeStream _local = FakeStream('local', [
     FakeTrack('audio'),
     FakeTrack('video'),
   ]);
 
   Future<RTCPeerConnection> connect(Map<String, Object> config) async {
-    final pc = FakePeerConnection(factory.log);
+    final pc = FakePeerConnection(factory.log, remoteIds: remoteIds);
     links.add(pc);
     return pc;
   }
@@ -388,8 +414,10 @@ class FakeHost implements CallHost {
   void remoteStream(String participant, MediaStream stream) {}
 
   @override
-  void peerState(String participant, String state) =>
-      states[participant] = state;
+  void peerState(String participant, String state) {
+    states[participant] = state;
+    stateLog.add((participant, state));
+  }
 
   @override
   void peerGone(String participant) => states.remove(participant);

@@ -4,7 +4,6 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
-import 'package:collection/collection.dart';
 import 'package:web/web.dart' as web;
 import 'package:webrtc_interface/webrtc_interface.dart';
 
@@ -49,8 +48,13 @@ class FrameCryptorImpl extends FrameCryptor {
     this.jsSender,
     this.jsReceiver,
     required this.keyProvider,
+    required this.cryptorId,
   });
   web.Worker worker;
+
+  /// Tells this cryptor apart from other links' cryptors of the same track,
+  /// in the worker and in its state events (moranduba).
+  final String cryptorId;
   bool _enabled = false;
   int _keyIndex = 0;
   final String _participantId;
@@ -64,10 +68,15 @@ class FrameCryptorImpl extends FrameCryptor {
   Future<void> dispose() async {
     var msgId = randomString(12);
     worker.postMessage(
-      {'msgType': 'dispose', 'msgId': msgId, 'trackId': _trackId}.jsify(),
+      {
+        'msgType': 'dispose',
+        'msgId': msgId,
+        'trackId': _trackId,
+        'cryptorId': cryptorId,
+      }.jsify(),
     );
     _enabled = false;
-    _factory.removeFrameCryptor(_trackId);
+    _factory.removeFrameCryptor(cryptorId);
     return;
   }
 
@@ -90,6 +99,7 @@ class FrameCryptorImpl extends FrameCryptor {
         'msgType': 'enable',
         'msgId': msgId,
         'trackId': _trackId,
+        'cryptorId': cryptorId,
         'enabled': enabled,
       }.jsify(),
     );
@@ -105,6 +115,7 @@ class FrameCryptorImpl extends FrameCryptor {
         'msgType': 'setKeyIndex',
         'msgId': msgId,
         'trackId': _trackId,
+        'cryptorId': cryptorId,
         'index': index,
       }.jsify(),
     );
@@ -120,6 +131,7 @@ class FrameCryptorImpl extends FrameCryptor {
         'msgType': 'updateCodec',
         'msgId': msgId,
         'trackId': _trackId,
+        'cryptorId': cryptorId,
         'codec': codec,
       }.jsify(),
     );
@@ -398,11 +410,8 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
         events.emit(WorkerResponse(msgId, data));
       } else if (msgType == 'event') {
         if (type == 'cryptorState') {
-          var trackId = data['trackId'];
           var participantId = data['participantId'];
-          var frameCryptor = _frameCryptors.values.firstWhereOrNull(
-            (element) => (element as FrameCryptorImpl).trackId == trackId,
-          );
+          var frameCryptor = _frameCryptors[data['cryptorId']];
           var state = data['state'];
           var frameCryptorState = FrameCryptorState.FrameCryptorStateNew;
           switch (state) {
@@ -477,6 +486,7 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
 
     var trackId = jsReceiver.track.id;
     var kind = jsReceiver.track.kind;
+    var cryptorId = randomString(12);
 
     if (web.window.hasProperty('RTCRtpScriptTransform'.toJS).toDart) {
       print('support RTCRtpScriptTransform');
@@ -488,6 +498,7 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
         'kind': kind,
         'participantId': participantId,
         'trackId': trackId,
+        'cryptorId': cryptorId,
       };
 
       jsReceiver.transform = web.RTCRtpScriptTransform(worker, options.jsify());
@@ -518,6 +529,7 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
             'exist': exist,
             'participantId': participantId,
             'trackId': trackId,
+            'cryptorId': cryptorId,
             'options': keyProvider.options.toJson(),
             'readableStream': readable,
             'writableStream': writable,
@@ -536,8 +548,9 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
       trackId,
       jsReceiver: jsReceiver,
       keyProvider: keyProvider,
+      cryptorId: cryptorId,
     );
-    _frameCryptors[trackId] = cryptor;
+    _frameCryptors[cryptorId] = cryptor;
     return Future.value(cryptor);
   }
 
@@ -551,6 +564,7 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
     var jsSender = (sender as RTCRtpSenderWeb).jsRtpSender;
     var trackId = jsSender.track?.id ?? sender.senderId;
     var kind = jsSender.track!.kind;
+    var cryptorId = randomString(12);
 
     if (web.window.hasProperty('RTCRtpScriptTransform'.toJS).toDart) {
       print('support RTCRtpScriptTransform');
@@ -562,6 +576,7 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
         'kind': kind,
         'participantId': participantId,
         'trackId': trackId,
+        'cryptorId': cryptorId,
         'options': keyProvider.options.toJson(),
       };
       print('object: ${options['keyProviderId']}');
@@ -593,6 +608,7 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
             'exist': exist,
             'participantId': participantId,
             'trackId': trackId,
+            'cryptorId': cryptorId,
             'options': keyProvider.options.toJson(),
             'readableStream': readable,
             'writableStream': writable,
@@ -611,13 +627,14 @@ class FrameCryptorFactoryImpl implements FrameCryptorFactory {
       trackId,
       jsSender: jsSender,
       keyProvider: keyProvider,
+      cryptorId: cryptorId,
     );
-    _frameCryptors[trackId] = cryptor;
+    _frameCryptors[cryptorId] = cryptor;
 
     return Future.value(cryptor);
   }
 
-  void removeFrameCryptor(String trackId) {
-    _frameCryptors.remove(trackId);
+  void removeFrameCryptor(String cryptorId) {
+    _frameCryptors.remove(cryptorId);
   }
 }

@@ -1,15 +1,18 @@
 // Browser end-to-end check of the member relay (ADR 0003), with three
 // pages: ROLES=alice,bob,carol ./e2e/run.sh e2e/relay_e2e.dart
 // Alice and Bob strip every ICE candidate from their direct link, so it
-// fails and Carol has to relay their media. Then they let candidates
-// through again, and the direct link takes over without a gap. Closed
-// links must release their frame cryptors.
+// fails and Carol has to relay their media; Carol strips them from her
+// first two relay attempts too. Then Alice and Bob let candidates through
+// again, and the direct link takes over without a gap. Closed links must
+// release their frame cryptors, in Dart and in the e2ee worker, and the
+// cryptors left must not read `New`.
 // Each page logs "E2E <role> PASS" or "E2E <role> FAIL …".
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:moranduba/core/calls/call_quality.dart';
 import 'package:moranduba/core/calls/group_call.dart';
+import 'package:moranduba/core/calls/receiver_e2ee.dart';
 import 'package:moranduba/core/groups/group_engine.dart';
 import 'package:moranduba/core/groups/groups.dart';
 import 'package:moranduba/core/groups/mls_bridge.dart';
@@ -44,6 +47,16 @@ final _blockedPeer = switch (_role) {
 
 var _blocked = true;
 
+/// Relay attempts Carol made, by target.
+final _relayAttempts = <String, int>{};
+const _blockedRelays = 2;
+
+/// Each live link holds audio and video, out and in.
+const _cryptorsPerLink = 4;
+
+/// The most cryptors the e2ee worker held at once.
+var _workerPeak = 0;
+
 void _log(String line) => debugPrint('E2E $_role $line');
 
 Future<void> _until(
@@ -76,14 +89,42 @@ Future<int> _cryptoLinks(GroupCall call) async =>
       _ => -1,
     };
 
-Future<void> _cryptoLinksBack(GroupCall call) async {
+Future<void> _cryptoLinksBack(
+  GroupCall call, {
+  Duration timeout = const Duration(seconds: 60),
+}) async {
   await _until(
     'cryptors of closed links released',
     () async => await _cryptoLinks(call) == 2,
-    timeout: const Duration(seconds: 60),
+    timeout: timeout,
   );
   _log('cryptors held by 2 links');
+  int? worker;
+  await _until('worker cryptors of closed links released', () async {
+    worker = await workerCryptorCount();
+    return worker != null && worker! <= 2 * _cryptorsPerLink;
+  });
+  _log('worker holds $worker cryptors, at most $_workerPeak during the call');
+  var states = <Object?, Object?>{};
+  await _until('no cryptor left in New', () async {
+    states = switch ((await call.stats())['cryptors']) {
+      final Map<Object?, Object?> cryptors => cryptors,
+      _ => const {},
+    };
+    return states.isNotEmpty &&
+        !states.values.any(
+          (state) => state == 'FrameCryptorStateNew' || state == 'new',
+        );
+  });
+  _log('${states.length} cryptor states, none New');
 }
+
+/// Samples the worker's cryptor count, which must stay bounded however
+/// often links fail.
+Timer _watchWorker() => Timer.periodic(const Duration(seconds: 1), (_) async {
+  final count = await workerCryptorCount() ?? 0;
+  if (count > _workerPeak) _workerPeak = count;
+});
 
 Future<int> _frames(GroupCall call, String peer) async =>
     switch (await _link(call, peer)) {
@@ -140,6 +181,10 @@ Future<void> _run() async {
   final groupId = await _group(session);
   final calls = session.calls!;
   calls.directBlocked = (peer) => _blocked && peer == _blockedPeer;
+  calls.relayBlocked = (peer) =>
+      (_relayAttempts[peer] = (_relayAttempts[peer] ?? 0) + 1) <=
+      _blockedRelays;
+  final sampler = _watchWorker();
   if (_role != 'alice') {
     await _until('call running', () => calls.inCall(groupId).contains(_alice));
     if (_role == 'carol') {
@@ -165,7 +210,7 @@ Future<void> _run() async {
     await _until(
       'video from ${peer.substring(0, 8)}',
       () async => await _frames(call, peer) > 10,
-      timeout: const Duration(seconds: 90),
+      timeout: const Duration(seconds: 180),
     );
   }
   _log('video from everyone');
@@ -175,6 +220,11 @@ Future<void> _run() async {
     await _carolStays(call);
   } else {
     await _relayed(call, far);
+  }
+  sampler.cancel();
+  // Three links at most (two direct, one relay), each mid-replacement.
+  if (_workerPeak > 6 * _cryptorsPerLink) {
+    throw StateError('worker held $_workerPeak cryptors at once');
   }
   await calls.leave();
   await session.close();
@@ -235,14 +285,18 @@ Future<void> _relayed(GroupCall call, String far) async {
 /// Carol: relays, drops the relay links once Alice and Bob connect, and
 /// stays until both have left.
 Future<void> _carolStays(GroupCall call) async {
-  // Two direct links plus one relay link to each end.
+  // Two direct links plus one relay link to each end, once the blocked
+  // attempts are over.
   await _until(
     'relaying',
-    () async => await _cryptoLinks(call) >= 4,
-    timeout: const Duration(seconds: 60),
+    () async =>
+        _relayAttempts.values.every((n) => n > _blockedRelays) &&
+        _relayAttempts.length == 2 &&
+        await _cryptoLinks(call) >= 4,
+    timeout: const Duration(seconds: 150),
   );
-  _log('relaying');
-  await _cryptoLinksBack(call);
+  _log('relaying, attempts ${_relayAttempts.values}');
+  await _cryptoLinksBack(call, timeout: const Duration(seconds: 180));
   await _until(
     'alice and bob leave',
     () => call.participants.isEmpty,

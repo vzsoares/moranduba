@@ -19,10 +19,19 @@ var participantCryptors = <FrameCryptor>[];
 var participantDataCryptors = <E2EEDataPacketCryptor>[];
 var keyProviders = <String, KeyProvider>{};
 
+/// The cryptors a message names: by cryptorId when it has one, else every
+/// cryptor of its trackId (moranduba).
+List<FrameCryptor> selectCryptors(String? cryptorId, String? trackId) =>
+    participantCryptors
+        .where((c) => cryptorId != null
+            ? c.cryptorId == cryptorId
+            : c.trackId == trackId)
+        .toList();
+
 FrameCryptor getTrackCryptor(
-    String participantIdentity, String trackId, KeyProvider keyProvider) {
-  var cryptor =
-      participantCryptors.firstWhereOrNull((c) => c.trackId == trackId);
+    String participantIdentity, String trackId, KeyProvider keyProvider,
+    {String? cryptorId}) {
+  var cryptor = selectCryptors(cryptorId, trackId).firstOrNull;
   if (cryptor == null) {
     logger.info(
         'creating new cryptor for $participantIdentity, trackId $trackId');
@@ -32,6 +41,7 @@ FrameCryptor getTrackCryptor(
       participantIdentity: participantIdentity,
       trackId: trackId,
       keyHandler: keyProvider.getParticipantKeyHandler(participantIdentity),
+      cryptorId: cryptorId,
     );
     //setupCryptorErrorEvents(cryptor);
     participantCryptors.add(cryptor);
@@ -69,10 +79,8 @@ E2EEDataPacketCryptor getDataPacketCryptor(
   return cryptor;
 }
 
-void unsetCryptorParticipant(String trackId) {
-  participantCryptors
-      .firstWhereOrNull((c) => c.trackId == trackId)
-      ?.unsetParticipant();
+void unsetCryptorParticipant(String? cryptorId, String trackId) {
+  selectCryptors(cryptorId, trackId).firstOrNull?.unsetParticipant();
 }
 
 void unsetDataPacketCryptorParticipant(String dataCryptorId) {
@@ -105,6 +113,7 @@ void main() async {
       var codec = options.getProperty('codec'.toJS) as JSString?;
       var msgType = options.getProperty('msgType'.toJS) as JSString;
       var keyProviderId = options.getProperty('keyProviderId'.toJS) as JSString;
+      var cryptorId = options.getProperty('cryptorId'.toJS) as JSString?;
 
       var keyProvider = keyProviders[keyProviderId.toDart];
 
@@ -113,8 +122,9 @@ void main() async {
         return;
       }
 
-      var cryptor =
-          getTrackCryptor(participantId.toDart, trackId.toDart, keyProvider);
+      var cryptor = getTrackCryptor(
+          participantId.toDart, trackId.toDart, keyProvider,
+          cryptorId: cryptorId?.toDart);
 
       cryptor.setupTransform(
           operation: msgType.toDart,
@@ -130,6 +140,7 @@ void main() async {
     var msg = e.data.dartify() as Map;
     var msgType = msg['msgType'];
     var msgId = msg['msgId'] as String?;
+    var cryptorId = msg['cryptorId'] as String?;
     logger.config('Got message $msgType, msgId $msgId');
     switch (msgType) {
       case 'keyProviderInit':
@@ -183,8 +194,7 @@ void main() async {
           var enabled = msg['enabled'] as bool;
           var trackId = msg['trackId'] as String;
 
-          var cryptors =
-              participantCryptors.where((c) => c.trackId == trackId).toList();
+          var cryptors = selectCryptors(cryptorId, trackId);
           for (var cryptor in cryptors) {
             logger.config('Set enable $enabled for trackId ${cryptor.trackId}');
             cryptor.setEnabled(enabled);
@@ -227,7 +237,8 @@ void main() async {
             return;
           }
 
-          var cryptor = getTrackCryptor(participantId, trackId, keyProvider);
+          var cryptor = getTrackCryptor(participantId, trackId, keyProvider,
+              cryptorId: cryptorId);
 
           await cryptor.setupTransform(
             operation: msgType,
@@ -253,7 +264,7 @@ void main() async {
         {
           var trackId = msg['trackId'] as String;
           logger.config('Removing trackId $trackId');
-          unsetCryptorParticipant(trackId);
+          unsetCryptorParticipant(cryptorId, trackId);
           self.postMessage({
             'type': 'cryptorRemoved',
             'trackId': trackId,
@@ -349,8 +360,7 @@ void main() async {
           var keyIndex = msg['index'];
           var trackId = msg['trackId'] as String;
           logger.config('Setup key index for track $trackId');
-          var cryptors =
-              participantCryptors.where((c) => c.trackId == trackId).toList();
+          var cryptors = selectCryptors(cryptorId, trackId);
           for (var c in cryptors) {
             logger.config('Set keyIndex for trackId ${c.trackId}');
             c.setKeyIndex(keyIndex);
@@ -437,8 +447,7 @@ void main() async {
           var codec = msg['codec'] as String;
           var trackId = msg['trackId'] as String;
           logger.config('Update codec for trackId $trackId, codec $codec');
-          var cryptor =
-              participantCryptors.firstWhereOrNull((c) => c.trackId == trackId);
+          var cryptor = selectCryptors(cryptorId, trackId).firstOrNull;
           cryptor?.updateCodec(codec);
 
           self.postMessage({
@@ -452,10 +461,13 @@ void main() async {
         {
           var trackId = msg['trackId'] as String;
           logger.config('Dispose for trackId $trackId');
-          var cryptor =
-              participantCryptors.firstWhereOrNull((c) => c.trackId == trackId);
+          var cryptors = selectCryptors(cryptorId, trackId);
+          var cryptor = cryptors.firstOrNull;
+          for (var c in cryptors) {
+            c.dispose();
+            participantCryptors.remove(c);
+          }
           if (cryptor != null) {
-            cryptor.lastError = CryptorError.kDisposed;
             self.postMessage({
               'type': 'cryptorDispose',
               'participantId': cryptor.participantIdentity,
@@ -471,6 +483,16 @@ void main() async {
               'msgType': 'response',
             }.jsify());
           }
+        }
+        break;
+      case 'cryptorCount':
+        {
+          self.postMessage({
+            'type': 'cryptorCount',
+            'count': participantCryptors.length,
+            'msgId': msgId,
+            'msgType': 'response',
+          }.jsify());
         }
         break;
       case 'dataCryptorEncrypt':

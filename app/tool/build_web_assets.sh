@@ -22,9 +22,8 @@ wasm-bindgen \
   --out-dir web/mls \
   "rust/target/wasm32-unknown-unknown/$dir/moranduba_mls.wasm"
 
-# The worker must match the dart_webrtc version the app resolves.
-webrtc="$(sed -n 's#.*"rootUri": "\(.*dart_webrtc-[^"]*\)".*#\1#p' \
-  .dart_tool/package_config.json | sed 's#^file://##')"
+# The vendored, patched dart_webrtc (third_party/README.md).
+webrtc=third_party/dart_webrtc
 dart compile js -O2 \
   --packages=.dart_tool/package_config.json \
   -o web/e2ee.worker.dart.js \
