@@ -32,10 +32,12 @@ class MeshTransport implements CallTransport {
     this._host, {
     this.iceServers = defaultIceServers,
     this.directBlocked,
+    this.connect = openPeerConnection,
   });
 
   final CallHost _host;
   final List<Map<String, String>> iceServers;
+  final PeerConnector connect;
 
   /// Tests: the direct link to these participants carries no candidates,
   /// so it fails.
@@ -56,8 +58,15 @@ class MeshTransport implements CallTransport {
   final Map<RelayJob, RTCPeerConnection?> _serving = {};
   Timer? _replanTimer;
 
-  /// Senders that already have a frame encryptor; one per sender.
-  final Set<String> _encrypted = {};
+  /// Failed peers whose planned relay has until the timer to connect.
+  final Map<String, ({String via, Timer timer})> _relayWait = {};
+
+  /// Failed peers and the relay that failed or never connected for them.
+  final Map<String, String> _relayGaveUp = {};
+
+  /// Senders that already have a frame encryptor, by link: native sender
+  /// ids are track ids, so they repeat across links.
+  final Map<RTCPeerConnection, Set<String>> _encrypted = {};
   final Set<String> _dialing = {};
   bool _closed = false;
 
@@ -95,7 +104,7 @@ class MeshTransport implements CallTransport {
     if (_closed || participant == _host.me) return;
     final previous = _reports[participant];
     _reports[participant] = report;
-    if (previous == null || !previous.sameAs(report)) _replan();
+    if (previous == null || !previous.sameAs(report)) _reportsChanged();
   }
 
   @override
@@ -105,8 +114,14 @@ class MeshTransport implements CallTransport {
     if (sdp == null) return;
     switch (signal.type) {
       case SignalType.offer:
-        await _close(from);
-        final pc = await _link(from, offer: _sdp(from, sdp));
+        // The old link closes only once the new one encrypts.
+        final old = _detach(from);
+        final RTCPeerConnection pc;
+        try {
+          pc = await _link(from, offer: _sdp(from, sdp));
+        } finally {
+          if (old != null) await _closeQuietly(old, 'link $from');
+        }
         await pc.setLocalDescription(await pc.createAnswer());
         final answer = await gatheredDescription(pc);
         if (answer?.sdp case final sdp?) {
@@ -174,7 +189,7 @@ class MeshTransport implements CallTransport {
 
   /// Opens the link to [participant]; with [offer], as the answering side.
   Future<RTCPeerConnection> _link(String participant, {String? offer}) async {
-    final pc = await createPeerConnection(_config);
+    final pc = await connect(_config);
     _links[participant] = pc;
     _watch(pc, participant);
     _timers.remove(participant)?.cancel();
@@ -193,7 +208,7 @@ class MeshTransport implements CallTransport {
       final sender = stream == null
           ? await pc.addTrack(track)
           : await pc.addTrack(track, stream);
-      _encrypted.add(sender.senderId);
+      (_encrypted[pc] ??= {}).add(sender.senderId);
       await _host.crypto.encrypt(sender, _host.me, link: pc);
     }
     if (!_host.outgoingTracks.any((t) => t.kind == 'video')) {
@@ -222,11 +237,11 @@ class MeshTransport implements CallTransport {
           streams: [?stream],
         ),
       );
-      if (encrypted) _encrypted.add(video.sender.senderId);
+      if (encrypted) (_encrypted[pc] ??= {}).add(video.sender.senderId);
       return;
     }
     if (await encryptOfferedVideo(pc, _host) case final sender?) {
-      _encrypted.add(sender.senderId);
+      (_encrypted[pc] ??= {}).add(sender.senderId);
       return;
     }
     for (final transceiver in await pc.getTransceivers()) {
@@ -258,6 +273,7 @@ class MeshTransport implements CallTransport {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
           _timers.remove(participant)?.cancel();
           _failures.remove(participant);
+          _relaySettled(participant);
           final changed =
               _connected.add(participant) | _failed.remove(participant);
           _show(participant);
@@ -294,7 +310,47 @@ class MeshTransport implements CallTransport {
 
   void _linksChanged() {
     _host.linksChanged();
+    _reportsChanged();
+  }
+
+  /// Relays may have come or gone, for this device to serve or to wait on.
+  void _reportsChanged() {
     _replan();
+    if (_closed) return;
+    for (final participant in [..._failed]) {
+      _publishState(participant);
+    }
+  }
+
+  /// Whether a relay for [participant]'s media is planned and still has
+  /// time to connect.
+  bool _relayPending(String participant) {
+    if (_closed) return false;
+    final reports = {..._reports, _host.me: linkReport};
+    final via = relayFor(_host.me, participant, reports);
+    if (via == null || _relayGaveUp[participant] == via) {
+      _relayWait.remove(participant)?.timer.cancel();
+      return false;
+    }
+    final wait = _relayWait[participant];
+    if (wait?.via != via) {
+      wait?.timer.cancel();
+      _relayWait[participant] = (
+        via: via,
+        timer: Timer(connectTimeout, () {
+          _relayWait.remove(participant);
+          _relayGaveUp[participant] = via;
+          if (!_closed) _publishState(participant);
+        }),
+      );
+    }
+    return true;
+  }
+
+  /// [participant]'s media arrives, so a relay wait is over.
+  void _relaySettled(String participant) {
+    _relayWait.remove(participant)?.timer.cancel();
+    _relayGaveUp.remove(participant);
   }
 
   /// The direct stream once its link connected, else the relayed one, else
@@ -317,7 +373,9 @@ class MeshTransport implements CallTransport {
         : _incoming[participant]?.connected ?? false
         ? 'relayed'
         : _failed.contains(participant)
-        ? 'failed'
+        ? _relayPending(participant)
+              ? 'relaying'
+              : 'failed'
         : direct ?? 'connecting';
     _host.peerState(participant, state);
   }
@@ -353,9 +411,9 @@ class MeshTransport implements CallTransport {
     _serving[job] = null;
     RTCPeerConnection? pc;
     try {
-      pc = await createPeerConnection(_config);
+      pc = await connect(_config);
       if (_closed || !_serving.containsKey(job)) {
-        await pc.close();
+        await _closeQuietly(pc, 'relay ${job.origin} to ${job.target}');
         return;
       }
       _serving[job] = pc;
@@ -430,10 +488,22 @@ class MeshTransport implements CallTransport {
     }
   }
 
-  /// [origin]'s media through [via], replacing any earlier relay for it.
+  /// [origin]'s media through [via], replacing any earlier relay for it
+  /// once the new link decrypts.
   Future<void> _acceptRelay(String via, String origin, String sdp) async {
-    await _closeIncoming(origin);
-    final pc = await createPeerConnection(_config);
+    final previous = _incoming.remove(origin);
+    try {
+      await _openRelay(via, origin, sdp);
+    } finally {
+      if (previous != null) {
+        await _closeQuietly(previous.pc, 'relay from ${previous.via}');
+        if (!_closed) _publishState(origin);
+      }
+    }
+  }
+
+  Future<void> _openRelay(String via, String origin, String sdp) async {
+    final pc = await connect(_config);
     if (_closed) {
       await _closeQuietly(pc, 'relay from $via');
       return;
@@ -456,9 +526,11 @@ class MeshTransport implements CallTransport {
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
           incoming.connected = true;
+          _relaySettled(origin);
           _show(origin);
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
             RTCPeerConnectionState.RTCPeerConnectionStateClosed:
+          if (!incoming.connected) _relayGaveUp[origin] = via;
           unawaited(_closeIncoming(origin));
         default:
           break;
@@ -498,6 +570,7 @@ class MeshTransport implements CallTransport {
     _timers.remove(participant)?.cancel();
     _failures.remove(participant);
     _reports.remove(participant);
+    _relaySettled(participant);
     await _close(participant);
     await _closeIncoming(participant);
     final through = [
@@ -513,20 +586,22 @@ class MeshTransport implements CallTransport {
   }
 
   Future<void> _close(String participant) async {
+    final pc = _detach(participant);
+    if (pc != null) await _closeQuietly(pc, 'link $participant');
+  }
+
+  /// Forgets the direct link to [participant] and returns it, still open.
+  RTCPeerConnection? _detach(String participant) {
     _direct.remove(participant);
     final wasConnected = _connected.remove(participant);
     final pc = _links.remove(participant);
-    if (pc != null) await _closeQuietly(pc, 'link $participant');
     if (wasConnected && !_closed) _linksChanged();
+    return pc;
   }
 
   Future<void> _closeQuietly(RTCPeerConnection pc, String what) async {
-    await _host.crypto.release(pc);
-    try {
-      await pc.close();
-    } catch (e) {
-      debugPrint('close $what: $e');
-    }
+    _encrypted.remove(pc);
+    await closeLink(_host, pc, what);
   }
 
   @override
@@ -549,7 +624,7 @@ class MeshTransport implements CallTransport {
         final kind = sender.track?.kind ?? transceiver.receiver.track?.kind;
         if (kind != 'video') continue;
         await replaceTrackSettled(sender, track);
-        if (track != null && _encrypted.add(sender.senderId)) {
+        if (track != null && (_encrypted[pc] ??= {}).add(sender.senderId)) {
           await _host.crypto.encrypt(sender, _host.me, link: pc);
         }
       }
@@ -581,10 +656,14 @@ class MeshTransport implements CallTransport {
   Future<void> close() async {
     _closed = true;
     _replanTimer?.cancel();
-    for (final timer in _timers.values) {
+    for (final timer in [
+      ..._timers.values,
+      for (final wait in _relayWait.values) wait.timer,
+    ]) {
       timer.cancel();
     }
     _timers.clear();
+    _relayWait.clear();
     for (final job in [..._serving.keys]) {
       await _stopServing(job);
     }

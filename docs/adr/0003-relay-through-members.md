@@ -99,6 +99,9 @@ heard (its own included), so no extra coordination message is needed:
   back to whatever is connected. The plan is recomputed on every report, so
   a relay that leaves is replaced by the next candidate.
 - Link stats name the relay (`via`) so the UI and tests can tell.
+- While a planned relay is coming up the end shows the peer as `relaying`;
+  it shows `failed`, with the TURN hint, only when no member can relay or
+  the relay link failed or did not connect within 20 s.
 
 ## Consequences
 

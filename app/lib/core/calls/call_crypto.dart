@@ -6,16 +6,29 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'receiver_e2ee.dart';
 
+/// The cryptors of one peer connection.
+class _LinkCryptors {
+  final List<FrameCryptor> senders = [];
+  final List<FrameCryptor> receivers = [];
+  final Map<FrameCryptor, String> receiverTracks = {};
+
+  int get count => senders.length + receivers.length;
+}
+
 /// Frame encryption for one call. The key comes from the group's MLS
 /// exporter; each epoch gets its own slot in the key ring, so frames sent
 /// under the previous epoch still decrypt during a membership change.
+///
+/// Each link owns its cryptors. [release] frees them once the link is
+/// closed, so redials, relay retries and mode switches do not pile them up.
 class CallCrypto {
-  CallCrypto._(this._keys);
+  CallCrypto._(this._factory, this._keys);
 
   static const ringSize = 16;
 
-  static Future<CallCrypto> create() async {
-    final keys = await frameCryptorFactory.createDefaultKeyProvider(
+  static Future<CallCrypto> create({FrameCryptorFactory? factory}) async {
+    final cryptors = factory ?? frameCryptorFactory;
+    final keys = await cryptors.createDefaultKeyProvider(
       KeyProviderOptions(
         sharedKey: true,
         ratchetSalt: Uint8List.fromList(utf8.encode('moranduba-call')),
@@ -27,55 +40,64 @@ class CallCrypto {
       ),
     );
     activateReceiverKeys(keys.id);
-    return CallCrypto._(keys);
+    return CallCrypto._(cryptors, keys);
   }
 
+  final FrameCryptorFactory _factory;
   final KeyProvider _keys;
-  final List<FrameCryptor> _senders = [];
-  final List<FrameCryptor> _receivers = [];
+  final Map<RTCPeerConnection, _LinkCryptors> _links = {};
+
+  /// Links already released; a cryptor that finishes setting up for one is
+  /// disposed at once.
+  final Expando<bool> _released = Expando();
   final Map<String, FrameCryptorState> states = {};
   final Map<FrameCryptor, String> _labels = {};
+  final Set<String> _decrypting = {};
   Timer? _settler;
   int? _index;
+  bool _disposed = false;
 
   int? get keyIndex => _index;
+
+  /// Links that still hold cryptors.
+  int get linkCount => _links.length;
+
+  /// Cryptors not yet disposed.
+  int get cryptorCount =>
+      _links.values.fold(0, (sum, link) => sum + link.count);
+
+  Iterable<FrameCryptor> get _senders =>
+      _links.values.expand((link) => link.senders);
 
   /// Installs the key for [epoch] and moves senders onto it.
   Future<void> setKey(Uint8List key, int epoch) async {
     final index = epoch % ringSize;
     await _keys.setSharedKey(key: key, index: index);
     _index = index;
-    for (final cryptor in _senders) {
+    for (final cryptor in [..._senders]) {
       await cryptor.setKeyIndex(index);
     }
   }
 
-  /// Cryptors by the link they belong to, so [release] can drop them when
-  /// it closes.
-  final Map<RTCPeerConnection, List<FrameCryptor>> _byLink = {};
-  final Map<FrameCryptor, String> _receiverTracks = {};
-
-  /// Links that still hold cryptors.
-  int get linkCount => _byLink.length;
+  bool _gone(RTCPeerConnection link) => _disposed || (_released[link] ?? false);
 
   Future<void> encrypt(
     RTCRtpSender sender,
     String me, {
     required RTCPeerConnection link,
   }) async {
-    final cryptor = await frameCryptorFactory.createFrameCryptorForRtpSender(
+    if (_gone(link)) return;
+    final cryptor = await _factory.createFrameCryptorForRtpSender(
       participantId: me,
       sender: sender,
       algorithm: Algorithm.kAesGcm,
       keyProvider: _keys,
     );
+    if (_gone(link)) return _dispose(cryptor);
     _watch(cryptor, 'out:${sender.track?.kind}:${sender.track?.id}');
-    _senders.add(cryptor);
-    (_byLink[link] ??= []).add(cryptor);
+    (_links[link] ??= _LinkCryptors()).senders.add(cryptor);
     await _apply(cryptor);
   }
-
-  final Set<String> _decrypting = {};
 
   /// Attach right after the transceiver exists: Chrome ignores a receiver
   /// transform added once frames may have arrived. Returns false when the
@@ -86,39 +108,48 @@ class CallCrypto {
     required RTCPeerConnection link,
   }) async {
     final trackId = receiver.track?.id;
-    if (trackId == null || !_decrypting.add(trackId)) return false;
-    final cryptor = await frameCryptorFactory.createFrameCryptorForRtpReceiver(
+    if (trackId == null || _gone(link) || !_decrypting.add(trackId)) {
+      return false;
+    }
+    final cryptor = await _factory.createFrameCryptorForRtpReceiver(
       participantId: participant,
       receiver: receiver,
       algorithm: Algorithm.kAesGcm,
       keyProvider: _keys,
     );
+    if (_gone(link)) {
+      _decrypting.remove(trackId);
+      await _dispose(cryptor);
+      return false;
+    }
     _watch(cryptor, 'in:${receiver.track?.kind}:${receiver.track?.id}');
-    _receivers.add(cryptor);
-    _receiverTracks[cryptor] = trackId;
-    (_byLink[link] ??= []).add(cryptor);
+    final owner = _links[link] ??= _LinkCryptors();
+    owner.receivers.add(cryptor);
+    owner.receiverTracks[cryptor] = trackId;
     await _apply(cryptor);
     return true;
   }
 
-  /// Disposes [link]'s cryptors; call before closing it. Links come and go
-  /// all call long (redials, relays, mode switches).
+  /// Disposes [link]'s cryptors. Call it after closing [link]: a cryptor
+  /// disposed while its sender still runs would stop encrypting it.
   Future<void> release(RTCPeerConnection link) async {
-    final cryptors = _byLink.remove(link) ?? const <FrameCryptor>[];
-    for (final cryptor in cryptors) {
-      _senders.remove(cryptor);
-      _receivers.remove(cryptor);
-      if (_receiverTracks.remove(cryptor) case final trackId?) {
-        _decrypting.remove(trackId);
-      }
+    _released[link] = true;
+    final owned = _links.remove(link);
+    if (owned == null) return;
+    _decrypting.removeAll(owned.receiverTracks.values);
+    for (final cryptor in [...owned.senders, ...owned.receivers]) {
       final label = _labels.remove(cryptor);
       // The same local track is encrypted once per link, under one label.
       if (label != null && !_labels.containsValue(label)) states.remove(label);
-      try {
-        await cryptor.dispose();
-      } catch (e) {
-        debugPrint('dispose cryptor $label: $e');
-      }
+      await _dispose(cryptor);
+    }
+  }
+
+  Future<void> _dispose(FrameCryptor cryptor) async {
+    try {
+      await cryptor.dispose();
+    } catch (e) {
+      debugPrint('dispose cryptor: $e');
     }
   }
 
@@ -140,8 +171,8 @@ class CallCrypto {
 
   Future<void> _apply(FrameCryptor cryptor) async {
     try {
-      if (_senders.contains(cryptor) && _index != null) {
-        await cryptor.setKeyIndex(_index!);
+      if (_index case final index? when _senders.contains(cryptor)) {
+        await cryptor.setKeyIndex(index);
       }
       await cryptor.setEnabled(true);
     } catch (_) {
@@ -165,17 +196,17 @@ class CallCrypto {
           : entry.value,
   };
 
+  /// Call end, after every link closed.
   Future<void> dispose() async {
+    _disposed = true;
     activateReceiverKeys(null);
     _settler?.cancel();
     _labels.clear();
-    for (final cryptor in [..._senders, ..._receivers]) {
-      await cryptor.dispose();
+    states.clear();
+    for (final link in [..._links.keys]) {
+      await release(link);
     }
-    _senders.clear();
-    _receivers.clear();
-    _byLink.clear();
-    _receiverTracks.clear();
+    _decrypting.clear();
     await _keys.dispose();
   }
 }

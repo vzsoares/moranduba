@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'blank_track.dart';
@@ -171,6 +172,25 @@ String connectionStateOf(RTCPeerConnection pc) =>
 const defaultIceServers = [
   {'urls': 'stun:stun.l.google.com:19302'},
 ];
+
+/// Opens a peer connection; tests swap in fakes.
+typedef PeerConnector = Future<RTCPeerConnection> Function(
+  Map<String, Object> config,
+);
+
+Future<RTCPeerConnection> openPeerConnection(Map<String, Object> config) =>
+    createPeerConnection(config);
+
+/// Closes [pc], then frees its cryptors, so no sender of it ever runs
+/// without one.
+Future<void> closeLink(CallHost host, RTCPeerConnection pc, String what) async {
+  try {
+    await pc.close();
+  } catch (e) {
+    debugPrint('close $what: $e');
+  }
+  await host.crypto.release(pc);
+}
 
 /// Adds a video transceiver sending [track], or nothing yet, encrypted
 /// from the start. Chrome skips a sender transform attached after

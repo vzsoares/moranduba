@@ -115,6 +115,9 @@ it in or out.
   sets the new key; FrameCryptor keeps the previous key briefly so in-flight
   frames still decrypt.
 - Switching mode never touches the key, so switching is a transport change only.
+- Each peer connection owns its cryptors. They are disposed after that link
+  closes (redial, relay retry, mode switch), never before, and a replacement
+  link encrypts before the one it replaces closes.
 
 ### Modes
 

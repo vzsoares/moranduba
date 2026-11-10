@@ -40,6 +40,7 @@ class SfuTransport implements CallTransport {
     required this.sfu,
     required this.iceServers,
     this.mode = 'server',
+    this.connect = openPeerConnection,
   });
 
   final CallHost _host;
@@ -49,6 +50,7 @@ class SfuTransport implements CallTransport {
   @override
   final String sfu;
   final List<Map<String, Object>> iceServers;
+  final PeerConnector connect;
 
   RTCPeerConnection? _pc;
   RTCDataChannel? _channel;
@@ -69,7 +71,7 @@ class SfuTransport implements CallTransport {
 
   @override
   Future<void> start() async {
-    final pc = await createPeerConnection({
+    final pc = await connect({
       'iceServers': [...iceServers, ...defaultIceServers],
       'sdpSemantics': 'unified-plan',
     });
@@ -273,12 +275,11 @@ class SfuTransport implements CallTransport {
     _closed = true;
     final pc = _pc;
     _pc = null;
-    if (pc != null) await _host.crypto.release(pc);
     try {
       await _channel?.close();
-      await pc?.close();
     } catch (e) {
-      debugPrint('close sfu link: $e');
+      debugPrint('close sfu channel: $e');
     }
+    if (pc != null) await closeLink(_host, pc, 'sfu link');
   }
 }
